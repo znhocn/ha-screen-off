@@ -47,12 +47,8 @@ Home Assistant (input_boolean.screen_power)  <-- 通过 REST + 事件流读取�
 # Linux（X11 用 xset，或 Wayland 用 wlopm）
 GOOS=linux  GOARCH=amd64 go build -o bin/scroff-linux  .
 
-# Windows
-# -ldflags "-H=windowsgui" 编成 GUI 子系统（登录任务启动时不弹黑窗口）；
-# 在终端里运行输出仍正常显示在当前控制台。
-GOOS=windows GOARCH=amd64 go build -ldflags "-H=windowsgui" -o bin/scroff.exe  .
-
-# macOS（Intel / Apple Silicon）
+# Windows / macOS（Intel / Apple Silicon）——普通控制台程序
+GOOS=windows GOARCH=amd64 go build -o bin/scroff.exe  .
 GOOS=darwin  GOARCH=amd64 go build -o bin/scroff-mac   .
 GOOS=darwin  GOARCH=arm64 go build -o bin/scroff-mac-m1 .
 ```
@@ -74,7 +70,7 @@ scroff help               # 显示本帮助
 scroff version            # 打印版本号（等价 -v 或 -version）
 ```
 
-参数：`-config PATH` 指定配置文件，`-url`/`-token`/`-entity` 覆盖配置里的对应值，`-verbose` 开启调试日志，`-d` 让 `serve` 后台运行，`-v`/`-version` 打印版本号。
+参数：`-config PATH` 指定配置文件，`-url`/`-token`/`-entity` 覆盖配置里的对应值，`-verbose` 开启调试日志，`-d` 让 `serve` 后台运行，`-v`/`-version` 打印版本号，`-hide-console`（仅 Windows）隐藏计划任务/自启动场景下的控制台窗口。
 
 直接运行 `scroff`（不带子命令）会显示帮助信息；如果配置文件还不存在，则提示你去跑 `scroff setup`。
 
@@ -171,11 +167,11 @@ WantedBy=multi-user.target
 
 ```powershell
 schtasks /Create /F /TN "HA Screen Off" ^
-  /TR "\"C:\Program Files\scroff\scroff.exe\" serve -config \"C:\Users\yourname\.config\scroff\config.json\"" ^
+  /TR "\"C:\Program Files\scroff\scroff.exe\" serve -config \"C:\Users\yourname\.config\scroff\config.json\" -hide-console" ^
   /SC ONLOGON /RL LIMITED
 ```
 
-附带发布的 Windows 二进制是 **GUI 子系统**（`-H=windowsgui`），登录任务启动时**不会弹黑窗口**（在终端里运行，输出仍正常显示在所在控制台）。
+Windows 二进制是普通的控制台程序。在任务命令行里带上 `-hide-console` 后，scroff 启动时立即把自己的控制台窗口隐藏（用 `GetConsoleWindow`/`ShowWindow`，无需辅助脚本或特殊子系统），因此**不会弹黑窗口**；而所有命令行交互都是完全原生的。
 
 > **Windows 服务（NSSM、`sc.exe` 等）无法控制屏幕也无法检测输入**：服务运行在 **Session 0**，与登录用户的桌面隔离。`SC_MONITORPOWER` 广播到不了交互会话，`SetThreadExecutionState` 唤醒那边也没有显示器，`GetLastInputInfo` 只反映服务会话的（空）输入。Vista 之后"允许服务与桌面交互"这个选项就已失效。
 

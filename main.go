@@ -44,6 +44,7 @@ import (
 	"scroff/internal/input"
 	"scroff/internal/screen"
 	"scroff/internal/setup"
+	"scroff/internal/winsys"
 )
 
 //go:embed VERSION
@@ -90,10 +91,18 @@ func run() error {
 	entity := fs.String("entity", "", "entity to watch, e.g. input_boolean.screen_power (overrides config)")
 	verbose := fs.Bool("verbose", false, "enable debug logging")
 	background := fs.Bool("d", false, "run serve in the background (daemon mode)")
+	hideConsole := fs.Bool("hide-console", false, "Windows only: hide this process's console window (for Task Scheduler logon tasks)")
 	showVersion := fs.Bool("v", false, "print version and exit")
 	showVersionLong := fs.Bool("version", false, "print version and exit")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	if *hideConsole {
+		// No-op outside Windows. Mats the black window a Task Scheduler logon
+		// task would otherwise flash onto the desktop. Call it as early as
+		// possible to minimize any visible frame.
+		winsys.HideConsoleWindow()
 	}
 
 	if *showVersion || *showVersionLong {
@@ -299,6 +308,7 @@ Flags:
   -v, -version         print the version and exit
   -verbose             enable debug logging
   -d                   (serve only) run in the background
+  -hide-console        (Windows only) hide the console window - for scheduled tasks
 
 Without -config the tool looks for ~/.config/scroff/config.json.
 Built with the Go standard library only.

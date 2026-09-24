@@ -68,12 +68,8 @@ machine:
 # Linux (X11 via xset, or Wayland via wlopm)
 GOOS=linux  GOARCH=amd64 go build -o bin/scroff-linux  .
 
-# Windows
-# -ldflags "-H=windowsgui" builds it as a GUI-subsystem binary (no console window
-# when started by a logon task); from a terminal the output still shows normally.
-GOOS=windows GOARCH=amd64 go build -ldflags "-H=windowsgui" -o bin/scroff.exe  .
-
-# macOS (Intel / Apple Silicon)
+# Windows / macOS (Intel / Apple Silicon) - plain console binaries
+GOOS=windows GOARCH=amd64 go build -o bin/scroff.exe  .
 GOOS=darwin  GOARCH=amd64 go build -o bin/scroff-mac   .
 GOOS=darwin  GOARCH=arm64 go build -o bin/scroff-mac-m1 .
 ```
@@ -97,7 +93,8 @@ scroff version            # print the version (same as -v or -version)
 
 Flags: `-config PATH` choose the config file, `-url`/`-token`/`-entity` override
 values from config, `-verbose` enables debug logging, `-d` runs `serve` in the
-background, `-v`/`-version` print the version.
+background, `-v`/`-version` print the version, `-hide-console` (Windows only)
+hides the console window of a scheduled/autostart run.
 
 Running bare `scroff` (no subcommand) prints the usage summary; if no config
 file exists yet it instead points you at `scroff setup`.
@@ -230,13 +227,15 @@ in your interactive desktop session:
 
 ```powershell
 schtasks /Create /F /TN "HA Screen Off" ^
-  /TR "\"C:\Program Files\scroff\scroff.exe\" serve -config \"C:\Users\yourname\.config\scroff\config.json\"" ^
+  /TR "\"C:\Program Files\scroff\scroff.exe\" serve -config \"C:\Users\yourname\.config\scroff\config.json\" -hide-console" ^
   /SC ONLOGON /RL LIMITED
 ```
 
-The shipped Windows binary is built as a **GUI-subsystem** file
-(`-H=windowsgui`), so the logon task starts it silently - **no console window
-pops up** (run it from a terminal and output still appears in that terminal).
+The Windows binary is a plain console-subsystem program. Pass
+`-hide-console` to the scheduled task's command line: scroff then hides its
+own console window right at startup (via `GetConsoleWindow`/`ShowWindow`, no
+helper scripts or special subsystem needed), so **no black window pops up** -
+while all command-line interactions stay fully native.
 
 > A **Windows service (NSSM, `sc.exe`, etc.) cannot control the screen or
 > detect input**: services run in **session 0**, isolated from your logged-on
