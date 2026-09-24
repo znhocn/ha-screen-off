@@ -20,8 +20,26 @@ const envChild = "SCROFF_DAEMON"
 const (
 	logName     = "scroff.log"
 	pidName     = "scroff.pid"
+	lockName    = "scroff.lock"
 	defaultPerm = 0o755
 )
+
+// Lock acquires the single-instance lock: only one scroff watchdog may run at
+// a time (a Task Scheduler logon trigger can otherwise start several). The
+// returned release drops the lock; it is tied to the open file handle (flock
+// on Unix, an exclusive share-mode handle on Windows), so a crashed/killed
+// process releases it automatically.
+func Lock() (release func(), err error) {
+	dir, err := RootDir()
+	if err != nil {
+		return nil, err
+	}
+	f, err := acquireLock(filepath.Join(dir, lockName))
+	if err != nil {
+		return nil, fmt.Errorf("another scroff instance is already running (single-instance lock held): %w", err)
+	}
+	return func() { _ = f.Close() }, nil
+}
 
 // RootDir returns the state directory, creating it if needed.
 func RootDir() (string, error) {
@@ -129,6 +147,10 @@ func Spawn(args []string) (int, error) {
 	if err := cmd.Start(); err != nil {
 		return 0, fmt.Errorf("start background process: %w", err)
 	}
+	// Reap the child asynchronously: an un-reaped (zombie) child would still
+	// answer to kill(pid, 0), hiding a quick startup failure from the liveness
+	// probe below and forcing the 5s timeout instead of failing fast.
+	go func() { _ = cmd.Wait() }()
 
 	// Wait for the child to write its pid file, confirming successful startup.
 	pid := cmd.Process.Pid

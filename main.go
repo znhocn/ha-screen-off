@@ -208,6 +208,15 @@ func cmdServe(cfg config.Config, configPath string) error {
 	if cfg.HA.URL == "" || cfg.HA.Token == "" {
 		return fmt.Errorf("no Home Assistant configuration found - run `scroff setup` (or create %s)", defaultOrSetupHint(configPath))
 	}
+	// Single instance: a Task Scheduler logon/unlock trigger can otherwise
+	// start several watchdogs that fight over the screen. The lock dies with
+	// the process (flock / exclusive handle), so a forced stop releases it.
+	release, err := daemon.Lock()
+	if err != nil {
+		return fmt.Errorf("refusing to start: %w", err)
+	}
+	defer release()
+
 	// Only advertise the daemon after everything above has validated, otherwise
 	// the parent would think startup succeeded while the child then dies.
 	if daemon.Child() {

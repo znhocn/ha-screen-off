@@ -69,7 +69,9 @@ machine:
 GOOS=linux  GOARCH=amd64 go build -o bin/scroff-linux  .
 
 # Windows
-GOOS=windows GOARCH=amd64 go build -o bin/scroff.exe  .
+# -ldflags "-H=windowsgui" builds it as a GUI-subsystem binary (no console window
+# when started by a logon task); from a terminal the output still shows normally.
+GOOS=windows GOARCH=amd64 go build -ldflags "-H=windowsgui" -o bin/scroff.exe  .
 
 # macOS (Intel / Apple Silicon)
 GOOS=darwin  GOARCH=amd64 go build -o bin/scroff-mac   .
@@ -162,9 +164,11 @@ toggle back to on** automatically.
 
 Platform notes:
 
-- **Windows** screen control only works from an **interactive desktop
-  session** - running via SSH or as a service/non-interactive terminal cannot
-  reach the desktop's windows. Task Scheduler "run at logon" works.
+- **Windows** screen control requires an **interactive desktop session**.
+  Running via SSH or as a service / NSSM / non-interactive terminal puts the
+  process in a session without your desktop, so screen toggles and input
+  detection do nothing. Use a Task Scheduler *logon* task (see "Run
+  automatically").
 - **Linux evdev** detection works on both X11 and Wayland with no
   display-server dependency, but reading `/dev/input/event*` needs read access
   - add your user to the `input` group (`sudo usermod -aG input $USER`) or run
@@ -221,8 +225,26 @@ WantedBy=multi-user.target
 **macOS (launchd)** - a `KeepAlive` LaunchAgent pointing at the binary and
 config.
 
-**Windows** - Task Scheduler (run at logon) or NSSM wrapping
-`scroff.exe serve -config config.json`.
+**Windows** - use **Task Scheduler** with a *logon* trigger, so `scroff` runs
+in your interactive desktop session:
+
+```powershell
+schtasks /Create /F /TN "HA Screen Off" ^
+  /TR "\"C:\Program Files\scroff\scroff.exe\" serve -config \"C:\Users\yourname\.config\scroff\config.json\"" ^
+  /SC ONLOGON /RL LIMITED
+```
+
+The shipped Windows binary is built as a **GUI-subsystem** file
+(`-H=windowsgui`), so the logon task starts it silently - **no console window
+pops up** (run it from a terminal and output still appears in that terminal).
+
+> A **Windows service (NSSM, `sc.exe`, etc.) cannot control the screen or
+> detect input**: services run in **session 0**, isolated from your logged-on
+> desktop. The `SC_MONITORPOWER` broadcast never reaches the interactive
+> session, waking via `SetThreadExecutionState` affects no display there, and
+> `GetLastInputInfo` only reports the service session's (empty) input. The
+> obsolete "Allow service to interact with the desktop" checkbox has done
+> nothing since Windows Vista.
 
 ## Troubleshooting
 
@@ -240,7 +262,7 @@ backend, live HA entity state and input watcher in one shot.
   switch in sync after an auto-wake; if blocked you get a `failed to sync`
   warning but the screen still wakes).
 - **Windows: screen never changes** - make sure it runs in an interactive
-  desktop session (logon task), not SSH/service.
+  desktop session (Task Scheduler *logon* task), not SSH/service/NSSM.
 - **Linux: mouse does not wake the screen** - the input watcher is disabled
   (see the startup warning). Add your user to the `input` group or install
   `xprintidle`.
@@ -249,6 +271,10 @@ backend, live HA entity state and input watcher in one shot.
 ## Notes
 
 - Stopping the process (`SIGINT`/`SIGTERM`) restores the screen to **on**.
+- **Single instance** - only one watchdog can run at a time. A second `serve`
+  (foreground or `-d`) refuses to start while one is running, so a Task
+  Scheduler trigger firing repeatedly (logon, unlock, reconnect...) cannot
+  spawn duplicate process that would fight over the screen.
 - If Home Assistant is unreachable the tool keeps the last known behaviour and
   logs (rate-limited) until HA is back.
 - If the input watcher cannot start (e.g. `/dev/input` not readable), the tool

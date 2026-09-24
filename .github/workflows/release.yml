@@ -77,7 +77,11 @@ jobs:
         run: |
           artifact="dist/scroff-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}"
           mkdir -p dist
-          go build -trimpath -o "$artifact" .
+          # Windows: GUI subsystem ("-H=windowsgui") so the logon task and
+          # double-click start it without popping a console window.
+          flags=""
+          if [ "${{ matrix.os }}" = "windows" ]; then flags="-H=windowsgui"; fi
+          go build -trimpath -ldflags "$flags" -o "$artifact" .
           chmod +x "$artifact"
 
       - name: Upload artifact

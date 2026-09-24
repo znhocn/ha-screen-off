@@ -4,6 +4,7 @@ package daemon
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"syscall"
@@ -24,6 +25,28 @@ func setAttributes(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: flagNoWindow | flagNewGroup | flagDetached,
 	}
+}
+
+// acquireLock takes a single-instance lock by opening path with share mode 0
+// (no sharing): a second process opening the same file fails with
+// ERROR_SHARING_VIOLATION. The lock is released when the handle is closed
+// (including on crash/kill).
+func acquireLock(path string) (*os.File, error) {
+	p, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, err
+	}
+	h, err := syscall.CreateFile(p,
+		syscall.GENERIC_READ|syscall.GENERIC_WRITE,
+		0, // share mode: no sharing -> exclusive
+		nil,
+		syscall.OPEN_ALWAYS,
+		syscall.FILE_ATTRIBUTE_NORMAL,
+		0)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(h), path), nil
 }
 
 // terminate stops the daemon. taskkill /F /T /PID force-kills the whole

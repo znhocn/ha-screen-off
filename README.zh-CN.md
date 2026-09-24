@@ -48,7 +48,9 @@ Home Assistant (input_boolean.screen_power)  <-- 通过 REST + 事件流读取�
 GOOS=linux  GOARCH=amd64 go build -o bin/scroff-linux  .
 
 # Windows
-GOOS=windows GOARCH=amd64 go build -o bin/scroff.exe  .
+# -ldflags "-H=windowsgui" 编成 GUI 子系统（登录任务启动时不弹黑窗口）；
+# 在终端里运行输出仍正常显示在当前控制台。
+GOOS=windows GOARCH=amd64 go build -ldflags "-H=windowsgui" -o bin/scroff.exe  .
 
 # macOS（Intel / Apple Silicon）
 GOOS=darwin  GOARCH=amd64 go build -o bin/scroff-mac   .
@@ -122,7 +124,7 @@ scroff stop       # 停止
 
 平台说明：
 
-- **Windows** 的屏幕控制只能在**交互式桌面会话**里生效——通过 SSH 或以服务/非交互终端方式运行时无法访问桌面的窗口。用"任务计划程序 → 登录时运行"即可。
+- **Windows** 的屏幕控制要求**交互式桌面会话**。通过 SSH、或以服务/NSSM/非交互终端方式运行时，进程落在没有你桌面的会话里，息屏/点亮和输入检测都无效。请用任务计划程序的"登录时"任务（见"开机自启"）。
 - **Linux evdev** 检测在 X11 和 Wayland 上都可用，不依赖显示服务器，但要能读取 `/dev/input/event*`——把用户加入 `input` 组（`sudo usermod -aG input $USER`）或以 root 运行。若设备打不开且 X11 下装了 `xprintidle`，会自动作为回退方案。
 - Linux 后端按会话自动选择（`auto`），依据 `XDG_SESSION_TYPE`（Wayland 会话一律用 Wayland 后端——`xset` 只能控制 XWayland 窗口，控制不了真实输出）；也可用 `"linux_backend": "x11"`、`"wayland"` 或 `"ddc"` 强制指定。DDC/CI 是选装，因为它直接关的是显示器自身电源。
 - X11/macOS 上工具可以*验证*屏幕是否真的熄灭（`xset q`、`ioreg`）；Windows 和 DDC 上不查询，而是周期性重新断言关机。
@@ -165,7 +167,17 @@ WantedBy=multi-user.target
 
 **macOS (launchd)** —— 一个指向该二进制和配置文件的 `KeepAlive` LaunchAgent。
 
-**Windows** —— 任务计划程序（登录时运行）或用 NSSM 包裹 `scroff.exe serve -config config.json`。
+**Windows** —— 用**任务计划程序**创建"**登录时**"触发的任务，让 `scroff` 跑在交互式桌面会话里：
+
+```powershell
+schtasks /Create /F /TN "HA Screen Off" ^
+  /TR "\"C:\Program Files\scroff\scroff.exe\" serve -config \"C:\Users\yourname\.config\scroff\config.json\"" ^
+  /SC ONLOGON /RL LIMITED
+```
+
+附带发布的 Windows 二进制是 **GUI 子系统**（`-H=windowsgui`），登录任务启动时**不会弹黑窗口**（在终端里运行，输出仍正常显示在所在控制台）。
+
+> **Windows 服务（NSSM、`sc.exe` 等）无法控制屏幕也无法检测输入**：服务运行在 **Session 0**，与登录用户的桌面隔离。`SC_MONITORPOWER` 广播到不了交互会话，`SetThreadExecutionState` 唤醒那边也没有显示器，`GetLastInputInfo` 只反映服务会话的（空）输入。Vista 之后"允许服务与桌面交互"这个选项就已失效。
 
 ## 故障排查
 
@@ -173,13 +185,14 @@ WantedBy=multi-user.target
 
 - **切换 HA 没反应** —— 查看 `scroff logs` 里有没有 `home assistant state changed`；没有的话说明你切的实体和配置里的 `ha.entity_id` 对不上。加 `-verbose` 还能看到逐条 `ha event` 日志。
 - **日志里是 `mode=polling`** —— HA 的反向代理不支持 `/api/stream` SSE（被缓冲/拦截）。轮询仍可用；放行流式响应（GET `/api/stream`）即恢复毫秒模式。另外工具还需要 GET `/api/states/*` 和 POST `/api/services/*`（后者用于自动唤醒后把 HA 开关同步回开；若被拦截会看到 `failed to sync` 告警，但屏幕唤醒不受影响）。
-- **Windows 上屏幕始终不变** —— 确认它在交互式桌面会话里运行（登录时任务计划程序），不是 SSH/服务。
+- **Windows 上屏幕始终不变** —— 确认它在交互式桌面会话里运行（任务计划程序"登录时"任务），不是 SSH/服务/NSSM。
 - **Linux 上动鼠标点不亮** —— 输入监视器被禁用了（见启动告警）。把用户加入 `input` 组，或安装 `xprintidle`。
 - **https + 自签名证书** —— 配置里设 `"insecure_tls": true`。
 
 ## 注意事项
 
 - 停止进程（`SIGINT`/`SIGTERM`）会把屏幕恢复为**点亮**。
+- **单实例** —— 同一时刻只允许一个看门狗运行。已有实例在跑时，再次 `serve`（前台或 `-d`）会拒绝启动，因此任务计划程序多次触发（登录、解锁、重连会话……）也不会拉起多个进程互相抢屏幕。
 - HA 失联时工具保留最后已知行为并（限频）记录日志，直到 HA 恢复。
 - 输入监视器无法启动时（例如 `/dev/input` 不可读），工具仍会运行，但自动唤醒被禁用——启动时告警一次。
 - 启动时会做依赖检查——接线前先跑 `scroff status` 诊断机器；它还会报告 HA 实体实时状态，URL/令牌/实体写错或自签名 https 证书都能立刻看出来。
