@@ -1,0 +1,19 @@
+{
+  "ha": {
+    "url": "http://homeassistant.local:8123",
+    "token": "PUT_YOUR_LONG_LIVED_ACCESS_TOKEN",
+    "entity_id": "input_boolean.screen_power",
+    "poll_interval_s": 1,
+    "timeout_s": 10,
+    "insecure_tls": false
+  },
+  "screen": {
+    "linux_backend": "auto",
+    "force_off_interval_s": 30,
+    "active_threshold_ms": 2000,
+    "watch_interval_ms": 250
+  },
+  "log": {
+    "level": "info"
+  }
+}

@@ -1,0 +1,23 @@
+# Binaries (build artifacts - rebuild with `go build`)
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go test binaries & coverage
+*.test
+*.out
+coverage.out
+coverage.html
+*.prof
+
+# Go workspace / tooling
+/dist/
+
+# Editor / OS cruft
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
