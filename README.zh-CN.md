@@ -67,14 +67,14 @@ scroff logs               # 查看后台 daemon 的日志
 scroff off                # 关闭一次屏幕
 scroff on                 # 点亮一次屏幕
 scroff help               # 显示本帮助
-scroff version            # 打印版本号（等价 -v 或 -version）
+scroff version            # 打印版本号（等价 -v 或 --version）
 ```
 
-参数：`-config PATH` 指定配置文件，`-url`/`-token`/`-entity` 覆盖配置里的对应值，`-verbose` 开启调试日志，`-d` 让 `serve` 后台运行，`-v`/`-version` 打印版本号。
+参数：`--config PATH` 指定配置文件，`--url`/`--token`/`--entity` 覆盖配置里的对应值，`--verbose` 开启调试日志，`-d` 让 `serve` 后台运行，`-v`/`--version` 打印版本号。多字母参数用双横线（`--config`），单字母参数用单横线（`-d`、`-v`）。
 
 直接运行 `scroff`（不带子命令）会显示帮助信息；如果配置文件还不存在，则提示你去跑 `scroff setup`。
 
-如果不指定配置文件（`-config`），工具自动使用 `~/.config/scroff/config.json`——也就是 `setup` 写入的那个文件。典型流程：
+如果不指定配置文件（`--config`），工具自动使用 `~/.config/scroff/config.json`——也就是 `setup` 写入的那个文件。典型流程：
 
 ```sh
 scroff setup      # 回答问题（默认值显示在 [方括号] 里）
@@ -153,7 +153,7 @@ Description=scroff (HA Screen Off) 显示器控制器
 After=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/scroff serve -config /etc/scroff/config.json
+ExecStart=/usr/local/bin/scroff serve --config /etc/scroff/config.json
 Restart=always
 RestartSec=3
 
@@ -167,7 +167,7 @@ WantedBy=multi-user.target
 
 ```powershell
 schtasks /Create /F /TN "HA Screen Off" ^
-  /TR "\"C:\Program Files\scroff\scroff.exe\" serve -config \"C:\Users\yourname\.config\scroff\config.json\"" ^
+  /TR "\"C:\Program Files\scroff\scroff.exe\" serve --config \"C:\Users\yourname\.config\scroff\config.json\"" ^
   /SC ONLOGON /RL LIMITED
 ```
 
@@ -181,7 +181,7 @@ Windows 二进制是**控制台子系统**程序，因此 PowerShell、cmd 等�
 
 先运行 `scroff status`——它会一次性报告配置路径、后台 pid、屏幕后端、HA 实体实时状态和输入监视器。
 
-- **切换 HA 没反应** —— 查看 `scroff logs` 里有没有 `home assistant state changed`；没有的话说明你切的实体和配置里的 `ha.entity_id` 对不上。加 `-verbose` 还能看到逐条 `ha event` 日志。
+- **切换 HA 没反应** —— 查看 `scroff logs` 里有没有 `home assistant state changed`；没有的话说明你切的实体和配置里的 `ha.entity_id` 对不上。加 `--verbose` 还能看到逐条 `ha event` 日志。
 - **日志里是 `mode=polling`** —— HA 的反向代理不支持 `/api/stream` SSE（被缓冲/拦截）。轮询仍可用；放行流式响应（GET `/api/stream`）即恢复毫秒模式。另外工具还需要 GET `/api/states/*` 和 POST `/api/services/*`（后者用于自动唤醒后把 HA 开关同步回开；若被拦截会看到 `failed to sync` 告警，但屏幕唤醒不受影响）。
 - **Windows 上屏幕始终不变** —— 确认它在交互式桌面会话里运行（任务计划程序"登录时"任务），不是 SSH/服务/NSSM。
 - **Linux 上动鼠标点不亮** —— 输入监视器被禁用了（见启动告警）。把用户加入 `input` 组，或安装 `xprintidle`。

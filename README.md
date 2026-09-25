@@ -88,17 +88,18 @@ scroff logs               # show the background daemon's log
 scroff off                # turn the screen off once
 scroff on                 # turn the screen on once
 scroff help               # show this usage summary
-scroff version            # print the version (same as -v or -version)
+scroff version            # print the version (same as -v or --version)
 ```
 
-Flags: `-config PATH` choose the config file, `-url`/`-token`/`-entity` override
-values from config, `-verbose` enables debug logging, `-d` runs `serve` in the
-background, `-v`/`-version` print the version.
+Flags: `--config PATH` choose the config file, `--url`/`--token`/`--entity` override
+values from config, `--verbose` enables debug logging, `-d` runs `serve` in the
+background, `-v`/`--version` print the version. Multi-letter flags use two dashes
+(`--config`), single-letter flags use one (`-d`, `-v`).
 
 Running bare `scroff` (no subcommand) prints the usage summary; if no config
 file exists yet it instead points you at `scroff setup`.
 
-If no config file is given (`-config`), the tool automatically uses
+If no config file is given (`--config`), the tool automatically uses
 `~/.config/scroff/config.json` - the same file `setup` writes. So the
 typical flow is:
 
@@ -211,7 +212,7 @@ Description=scroff (HA Screen Off) display controller
 After=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/scroff serve -config /etc/scroff/config.json
+ExecStart=/usr/local/bin/scroff serve --config /etc/scroff/config.json
 Restart=always
 RestartSec=3
 
@@ -227,7 +228,7 @@ in your interactive desktop session:
 
 ```powershell
 schtasks /Create /F /TN "HA Screen Off" ^
-  /TR "\"C:\Program Files\scroff\scroff.exe\" serve -config \"C:\Users\yourname\.config\scroff\config.json\"" ^
+  /TR "\"C:\Program Files\scroff\scroff.exe\" serve --config \"C:\Users\yourname\.config\scroff\config.json\"" ^
   /SC ONLOGON /RL LIMITED
 ```
 
@@ -265,7 +266,7 @@ backend, live HA entity state and input watcher in one shot.
 
 - **No reaction when toggling HA** - check `scroff logs` for
   `home assistant state changed`; if missing, the entity you toggle is not the
-  configured `ha.entity_id`. With `-verbose` you also see per-event `ha event`
+  configured `ha.entity_id`. With `--verbose` you also see per-event `ha event`
   lines.
 - **`mode=polling` in the log** - the HA reverse proxy does not support the
   `/api/stream` SSE endpoint (buffered/blocked). Polling still works; allow

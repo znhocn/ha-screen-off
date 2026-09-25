@@ -17,7 +17,7 @@
 // A bare `scroff` (no subcommand) prints a setup hint when no config exists,
 // and the usage summary otherwise.
 //
-// Without -config the tool looks for ~/.config/scroff/config.json.
+// Without --config the tool looks for ~/.config/scroff/config.json.
 //
 // Built with the Go standard library only, so it cross-compiles to
 // Windows / macOS / Linux from any host without extra toolchains.
@@ -99,6 +99,20 @@ func run() error {
 	}
 
 	fs := flag.NewFlagSet("scroff "+cmd, flag.ContinueOnError)
+	fs.Usage = func() {
+		fmt.Fprintf(fs.Output(), "Usage: scroff %s [flags]\n\nFlags:\n", cmd)
+		fs.VisitAll(func(f *flag.Flag) {
+			dash := "-"
+			if len(f.Name) > 1 {
+				dash = "--"
+			}
+			help := f.Usage
+			if f.DefValue != "" {
+				help += " (default " + f.DefValue + ")"
+			}
+			fmt.Fprintf(fs.Output(), "  %s%s    %s\n", dash, f.Name, help)
+		})
+	}
 	configPath := fs.String("config", defaultConfigPath(), "path to JSON config file (default: ~/.config/scroff/config.json)")
 	url := fs.String("url", "", "Home Assistant base URL (overrides config)")
 	token := fs.String("token", "", "Home Assistant long-lived access token (overrides config)")
@@ -107,6 +121,18 @@ func run() error {
 	background := fs.Bool("d", false, "run serve in the background (daemon mode)")
 	showVersion := fs.Bool("v", false, "print version and exit")
 	showVersionLong := fs.Bool("version", false, "print version and exit")
+
+	// Enforce the dash convention up front: single-letter flags use one dash
+	// (-d, -v), everything longer uses two (--config, --verbose). Go's flag
+	// package would otherwise accept both forms silently.
+	flagKinds := map[string]bool{} // flag name -> takes a separate value
+	fs.VisitAll(func(f *flag.Flag) {
+		_, isBool := f.Value.(interface{ IsBoolFlag() bool })
+		flagKinds[f.Name] = !isBool
+	})
+	if err := checkFlagStyle(args, flagKinds); err != nil {
+		return err
+	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -188,6 +214,46 @@ func run() error {
 	default:
 		return fmt.Errorf("unknown command %q (want setup|serve|stop|off|on|status|logs)", cmd)
 	}
+}
+
+// checkFlagStyle enforces the dash convention: single-letter flags are written
+// with one dash (-d, -v) and multi-letter flags with two (--config, --verbose).
+// Go's flag package accepts either form without complaint, so we validate the
+// style here. takesValue marks flags that consume the next argument as their
+// value (so that value is not mistaken for another flag).
+func checkFlagStyle(args []string, takesValue map[string]bool) error {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			return nil
+		}
+		if len(a) < 2 || a[0] != '-' {
+			continue
+		}
+		raw := a
+		if eq := strings.IndexByte(raw, '='); eq >= 0 {
+			raw = raw[:eq]
+		}
+		double := strings.HasPrefix(raw, "--")
+		name := strings.TrimPrefix(raw, "--")
+		if !double {
+			name = raw[1:]
+		}
+		if _, known := takesValue[name]; !known {
+			continue // let flag.Parse report genuinely unknown flags
+		}
+		if (double && len(name) == 1) || (!double && len(name) > 1) {
+			dash := "-"
+			if len(name) > 1 {
+				dash = "--"
+			}
+			return fmt.Errorf("flag %s: use %q instead", a, dash+name)
+		}
+		if takesValue[name] && i+1 < len(args) {
+			i++ // skip the token that is this flag's value
+		}
+	}
+	return nil
 }
 
 // defaultConfigPath returns ~/.config/scroff/config.json if it exists,
@@ -330,13 +396,13 @@ Usage:
   scroff help           show this help
 
 Flags:
-  -config PATH         config file (default: ~/.config/scroff/config.json)
-  -url/-token/-entity  override the value from config
-  -v, -version         print the version and exit
-  -verbose             enable debug logging
-  -d                   (serve only) run in the background
+  --config PATH         config file (default: ~/.config/scroff/config.json)
+  --url/--token/--entity  override the value from config
+  -v, --version         print the version and exit
+  --verbose             enable debug logging
+  -d                    (serve only) run in the background
 
-Without -config the tool looks for ~/.config/scroff/config.json.
+Without --config the tool looks for ~/.config/scroff/config.json.
 Built with the Go standard library only.
 `)
 }
