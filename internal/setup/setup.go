@@ -47,7 +47,11 @@ func Interactive(r io.Reader, w io.Writer) (string, error) {
 
 	cfg := config.Default()
 	cfg.HA.URL = p.text("Home Assistant base URL", cfg.HA.URL, false)
-	cfg.HA.Token = p.required("Long-lived access token (Home Assistant > user > Security)", "token")
+	token, err := p.required("Long-lived access token (Home Assistant > user > Security)", "token")
+	if err != nil {
+		return "", err
+	}
+	cfg.HA.Token = token
 	cfg.HA.EntityID = p.text("Entity id to watch (e.g. input_boolean.screen_power)", cfg.HA.EntityID, false)
 	cfg.HA.PollIntervalS = p.intQ("Poll Interval (seconds)", cfg.HA.PollIntervalS)
 	cfg.HA.TimeoutS = p.intQ("HTTP timeout (seconds)", cfg.HA.TimeoutS)
@@ -110,14 +114,23 @@ func (p *prompter) text(label, def string, secret bool) string {
 	return line
 }
 
-// required reads a non-empty value (no default).
-func (p *prompter) required(label, what string) string {
+// required reads a non-empty value (no default). It fails instead of looping
+// forever when the input stream ends (e.g. `scroff setup < /dev/null`).
+func (p *prompter) required(label, what string) (string, error) {
 	for {
 		fmt.Fprintf(p.w, "%s: ", label)
-		line, _ := p.r.ReadString('\n')
+		line, err := p.r.ReadString('\n')
+		// A final line without a trailing newline (EOF after content) is still
+		// a valid answer; anything else after EOF means the stream ran out.
+		switch {
+		case err == io.EOF && strings.TrimSpace(line) != "":
+			return strings.TrimSpace(line), nil
+		case err != nil:
+			return "", fmt.Errorf("no input for %s (stdin ended)", what)
+		}
 		line = strings.TrimSpace(line)
 		if line != "" {
-			return line
+			return line, nil
 		}
 		fmt.Fprintf(p.w, "%s must not be empty, try again.\n", what)
 	}

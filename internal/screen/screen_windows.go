@@ -100,13 +100,16 @@ func (w *windowsController) sendMonitorPower(lParam int32) error {
 func (w *windowsController) Off() error { return w.sendMonitorPower(monitorOff) }
 
 func (w *windowsController) On() error {
-	// 1) Force the display on by resetting the display idle timer. The
-	// ES_DISPLAY_REQUIRED flag makes the display wake immediately; we then
-	// clear the flag (ES_CONTINUOUS) so we don't hold the display on forever
-	// (the Home Assistant polling loop keeps driving it anyway).
+	// 1) Wake the display by asserting ES_DISPLAY_REQUIRED momentarily.
+	// SetThreadExecutionState returns the *previous* flags; a non-zero return
+	// means the call succeeded and the display-required flag is now armed. It
+	// stays armed until this thread's next SetThreadExecutionState clears it -
+	// the Home Assistant polling loop calls this constantly while on, which is
+	// exactly the keep-awake behaviour we want, and it naturally clears when
+	// the watchdog stops driving.
 	if r, _, _ := procSetThreadExecState.Call(uintptr(esDisplayRequired)); r == 0 {
-		// Not fatal: SC_MONITORPOWER=-1 below may still work.
-		r, _, _ = procSetThreadExecState.Call(uintptr(esContinuous))
+		// Failed (rare) - not fatal: SC_MONITORPOWER=-1 below may still work.
+		_, _, _ = procSetThreadExecState.Call(uintptr(esContinuous))
 	}
 	// 2) Belt-and-suspenders: also broadcast SC_MONITORPOWER=-1, which turns
 	// the display back on when the earlier Off() was the one that turned it off.

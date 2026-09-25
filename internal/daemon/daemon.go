@@ -88,13 +88,16 @@ func Child() bool {
 	return os.Getenv(envChild) == "1"
 }
 
-// WritePID stores this process's pid (only meaningful inside the daemon).
+// WritePID stores this process's pid and its start time (epoch seconds).
+// The start time lets Stop detect a stale pid file whose number has since
+// been reused by an unrelated process. Format: "pid\nstart_sec\n".
 func WritePID() error {
 	path, err := PIDFile()
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o644)
+	return os.WriteFile(path,
+		[]byte(fmt.Sprintf("%d\n%d\n", os.Getpid(), processStartUnixSec(os.Getpid()))), 0o644)
 }
 
 // ReadPID returns the pid stored by the running daemon, if any.
@@ -110,11 +113,34 @@ func ReadPID() (int, error) {
 		}
 		return 0, err
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	pid, err := strconv.Atoi(strings.TrimSpace(lines[0]))
 	if err != nil {
 		return 0, fmt.Errorf("corrupt pid file %s: %w", path, err)
 	}
 	return pid, nil
+}
+
+// recordedStartSec returns the process start time saved by WritePID, or 0
+// when it is unavailable (older pid files, non-Linux/Windows platforms).
+func recordedStartSec() int64 {
+	path, err := PIDFile()
+	if err != nil {
+		return 0
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) < 2 {
+		return 0
+	}
+	sec, err := strconv.ParseInt(strings.TrimSpace(lines[1]), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return sec
 }
 
 // RemovePID deletes the pid file (ignores not-exist errors).
@@ -168,19 +194,44 @@ func Spawn(args []string) (int, error) {
 			// alive. This catches crashes shortly after the pid file was written.
 			time.Sleep(500 * time.Millisecond)
 			if err := processAlive(pid); err != nil {
-				return 0, fmt.Errorf("background process exited after startup; last log lines:\n%s", tail(logf.Name(), 8))
+				return 0, spawnFail("background process exited after startup", logf.Name())
 			}
 			return pid, nil
 		}
 		if !time.Now().Before(deadline) {
-			return 0, fmt.Errorf("timeout waiting for background process; last log lines:\n%s", tail(logf.Name(), 8))
+			return 0, spawnFail("timed out waiting for the background process to fully start", logf.Name())
 		}
 		// Child exited before writing its pid file?
 		if err := processAlive(pid); err != nil {
-			return 0, fmt.Errorf("background process exited immediately; last log lines:\n%s", tail(logf.Name(), 8))
+			return 0, spawnFail("background process exited before writing its pid file", logf.Name())
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+}
+
+// spawnFail builds a Spawn error. A child that dies that fast is usually a
+// second concurrent `serve -d` losing the single-instance race, so the common
+// case gets a direct message; anything else falls back to the log tail.
+func spawnFail(kind, logPath string) error {
+	if lockHeld() {
+		return fmt.Errorf("another scroff instance is already running (single-instance lock is held)")
+	}
+	return fmt.Errorf("%s; last log lines:\n%s", kind, tail(logPath, 8))
+}
+
+// lockHeld reports whether another scroff watchdog currently holds the
+// single-instance lock.
+func lockHeld() bool {
+	dir, err := RootDir()
+	if err != nil {
+		return false
+	}
+	f, err := acquireLock(filepath.Join(dir, lockName))
+	if err != nil {
+		return true
+	}
+	_ = f.Close()
+	return false
 }
 
 // tail returns the last n lines of file, for error reporting.
@@ -198,7 +249,9 @@ func tail(path string, n int) string {
 
 // Stop terminates the running watchdog and removes its pid file. A stale pid
 // file (left behind by a crash or hard kill such as taskkill /F or a task End)
-// is detected and cleaned up instead of erroring.
+// is detected and cleaned up instead of erroring. The recorded start time also
+// guards against pid reuse: if the number now belongs to an unrelated process,
+// Stop refuses to touch it.
 func Stop() (int, error) {
 	pid, err := ReadPID()
 	if err != nil {
@@ -208,9 +261,23 @@ func Stop() (int, error) {
 		_ = RemovePID()
 		return 0, fmt.Errorf("no running watchdog: pid %d is gone (stale pid file removed)", pid)
 	}
+	if start := recordedStartSec(); start > 0 {
+		if live := processStartUnixSec(pid); live > 0 && absDiff(live, start) > 3 {
+			_ = RemovePID()
+			return 0, fmt.Errorf("no running watchdog: pid %d belongs to a different process now (stale pid file removed)", pid)
+		}
+	}
 	if err := terminate(pid); err != nil {
 		return 0, fmt.Errorf("stop pid %d: %w", pid, err)
 	}
 	_ = RemovePID()
 	return pid, nil
+}
+
+// absDiff returns the absolute difference between two epoch seconds.
+func absDiff(a, b int64) int64 {
+	if a > b {
+		return a - b
+	}
+	return b - a
 }

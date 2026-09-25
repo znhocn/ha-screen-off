@@ -124,18 +124,17 @@ func (l *linuxController) On() error {
 func (l *linuxController) IsOff() (bool, error) {
 	switch l.backend {
 	case backendX11:
-		out, err := exec.Command("xset", "q").Output()
+		// Force the C locale: `xset q` reports localized "Monitor is On/Off"
+		// in non-English environments, which would defeat this check.
+		cmd := exec.Command("xset", "q")
+		cmd.Env = append(os.Environ(), "LC_ALL=C", "LANG=C")
+		out, err := cmd.Output()
 		if err != nil {
 			return false, fmt.Errorf("xset q: %w", err)
 		}
 		// "Monitor is Off" present means the session display is asleep.
-		hasOn := bytes.Contains(out, []byte("Monitor is On"))
-		hasOff := bytes.Contains(out, []byte("Monitor is Off"))
-		if hasOff {
+		if bytes.Contains(out, []byte("Monitor is Off")) {
 			return true, nil
-		}
-		if hasOn {
-			return false, nil
 		}
 		return false, nil
 	case backendWayland:

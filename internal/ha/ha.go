@@ -43,8 +43,8 @@ type Client struct {
 	http     *http.Client // request calls (State / service calls), has a total timeout
 	stream   *http.Client // long-lived /api/stream connection, no total timeout
 
-	lastLog time.Time // for rate-limiting repeated errors
-	modeLog string    // last monitoring mode we logged
+	lastLog atomic.Int64 // unix nano of the last rate-limited error log
+	modeLog string       // last monitoring mode we logged
 }
 
 // New builds a Client. The entity's domain is derived from its entity_id.
@@ -173,9 +173,9 @@ func (c *Client) Poll(ctx context.Context, interval time.Duration, onChange func
 			continue
 		}
 		c.setMode("polling")
-		if time.Since(c.lastLog) > 30*time.Second {
+		if time.Since(time.Unix(0, c.lastLog.Load())) > 30*time.Second {
 			slog.Warn("home assistant event stream error - continuing with polling", "error", err)
-			c.lastLog = time.Now()
+			c.lastLog.Store(time.Now().UnixNano())
 		}
 		select {
 		case <-time.After(streamRetryDelay):
@@ -216,15 +216,24 @@ func (c *Client) streamAndRead(ctx context.Context, onChange func(state string))
 
 	// Rotate the connection when it is idle for too long (covers proxies that
 	// silently kill streams) and abort it promptly on shutdown. Closing the
-	// body unblocks the read loop below.
+	// body unblocks the read loop below. The goroutine is released when
+	// streamAndRead returns (via released), and the timer is stopped then too,
+	// so a fast-failing stream does not pile up idle timers/goroutines.
+	idle := time.NewTimer(streamIdleTimeout)
+	released := make(chan struct{})
+	defer func() {
+		close(released)
+		idle.Stop()
+	}()
 	var rotated atomic.Bool
 	go func() {
 		select {
 		case <-ctx.Done():
 			resp.Body.Close()
-		case <-time.After(streamIdleTimeout):
+		case <-idle.C:
 			rotated.Store(true)
 			resp.Body.Close()
+		case <-released:
 		}
 	}()
 
@@ -302,10 +311,10 @@ func (c *Client) pollLoop(ctx context.Context, interval time.Duration, onChange 
 		case <-ticker.C:
 			st, err := c.State(ctx)
 			if err != nil {
-				if time.Since(c.lastLog) > 30*time.Second {
+				if time.Since(time.Unix(0, c.lastLog.Load())) > 30*time.Second {
 					slog.Warn("home assistant unreachable", "error", err,
 						"hint", "check url/token, and set ha.insecure_tls if an https/self-signed cert is involved")
-					c.lastLog = time.Now()
+					c.lastLog.Store(time.Now().UnixNano())
 				}
 				continue
 			}

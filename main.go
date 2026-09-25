@@ -154,6 +154,9 @@ func run() error {
 	if *entity != "" {
 		cfg.HA.EntityID = *entity
 	}
+	if cfg.Log.Verbose {
+		cfg.Log.Level = "debug"
+	}
 	if *verbose {
 		cfg.Log.Level = "debug"
 	}
@@ -213,7 +216,9 @@ func defaultOrSetupHint(configPath string) string {
 func startBackground() error {
 	childArgs := make([]string, 0, len(os.Args)-1)
 	for _, a := range os.Args[1:] {
-		if a == "-d" || a == "--daemon" {
+		// Go's flag package accepts both "-d" and "--d"; drop either, the
+		// child must not daemonize again.
+		if a == "-d" || a == "--d" {
 			continue
 		}
 		childArgs = append(childArgs, a)

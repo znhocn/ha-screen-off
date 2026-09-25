@@ -13,7 +13,9 @@ import (
 // macOS display control via standard Apple utilities: pmset, caffeinate and
 // ioreg. All three ship with macOS so no extra installs are needed.
 
-var iorePowerRegexp = regexp.MustCompile(`"DevicePowerState"=(\d+)`)
+// "DevicePowerState"=2 and "DevicePowerState" = 2 both occur in ioreg output
+// across macOS versions, so the separator whitespace is optional.
+var iorePowerRegexp = regexp.MustCompile(`"DevicePowerState"\s*=\s*(\d+)`)
 
 type macosController struct{}
 

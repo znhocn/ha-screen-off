@@ -44,9 +44,13 @@ func (noopWatcher) IdleSince() time.Duration { return time.Hour }
 
 func (noopWatcher) Close() {}
 
+// platformMethod records the idle-detection technique actually selected by
+// newPlatform (each OS sets it to match its primary or fallback backend).
+var platformMethod = "unknown"
+
 // Method reports the idle-detection technique in use on this platform, for
 // diagnostics and logs.
-func Method() string { return method() }
+func Method() string { return platformMethod }
 
 // unsupported is used on platforms where idle detection is not implemented.
 func unsupported() (Watcher, error) {

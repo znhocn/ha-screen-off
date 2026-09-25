@@ -30,6 +30,7 @@ func newPlatform() (Watcher, error) {
 	if err := user32.Load(); err != nil {
 		return nil, fmt.Errorf("load user32.dll: %w", err)
 	}
+	platformMethod = "windows-GetLastInputInfo"
 	return &windowsWatcher{}, nil
 }
 
@@ -53,5 +54,3 @@ func (w *windowsWatcher) IdleSince() time.Duration {
 }
 
 func (w *windowsWatcher) Close() {}
-
-func method() string { return "windows-GetLastInputInfo" }

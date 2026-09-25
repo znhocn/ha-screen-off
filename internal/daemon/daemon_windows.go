@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strconv"
 	"syscall"
+	"unsafe"
 )
 
 const (
@@ -16,7 +17,12 @@ const (
 	flagNoWindow = 0x08000000 // CREATE_NO_WINDOW
 
 	processQueryInfo = 0x0400 // PROCESS_QUERY_INFORMATION
+	processQueryLtd  = 0x1000 // PROCESS_QUERY_LIMITED_INFORMATION
 )
+
+// epoch1900 is the seconds between the Windows FILETIME epoch (1601-01-01)
+// and the Unix epoch (1970-01-01).
+const epoch1900 = 11644473600
 
 // setAttributes starts the child without a console window, detached from the
 // terminal session. Screen toggling still works as long as the child runs in
@@ -73,4 +79,30 @@ func processAlive(pid int) error {
 	}
 	_ = syscall.CloseHandle(h)
 	return nil
+}
+
+// processStartUnixSec returns the epoch second at which pid started, from the
+// creation time in its FILETIME. It feeds the pid-reuse guard in daemon.Stop.
+var procGetProcessTimes = syscall.NewLazyDLL("kernel32.dll").NewProc("GetProcessTimes")
+
+// filetime is a Windows FILETIME (100ns ticks since 1601-01-01).
+type filetime struct{ lo, hi uint32 }
+
+func processStartUnixSec(pid int) int64 {
+	h, err := syscall.OpenProcess(processQueryLtd, false, uint32(pid))
+	if err != nil {
+		return 0
+	}
+	defer syscall.CloseHandle(h)
+	var creation, exit, kernel, user filetime
+	r, _, _ := procGetProcessTimes.Call(uintptr(h),
+		uintptr(unsafe.Pointer(&creation)),
+		uintptr(unsafe.Pointer(&exit)),
+		uintptr(unsafe.Pointer(&kernel)),
+		uintptr(unsafe.Pointer(&user)))
+	if r == 0 {
+		return 0
+	}
+	ft := uint64(creation.hi)<<32 | uint64(creation.lo)
+	return int64(ft/10_000_000) - epoch1900
 }
