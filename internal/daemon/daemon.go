@@ -63,6 +63,17 @@ func LogFile() (string, error) {
 	return filepath.Join(dir, logName), nil
 }
 
+// OpenLog returns an append-only handle to the background log file. Used by
+// -d children (via Spawn) and by silent watchdog runs (scheduled tasks), so
+// `scroff logs` always has something to show.
+func OpenLog() (*os.File, error) {
+	path, err := LogFile()
+	if err != nil {
+		return nil, err
+	}
+	return os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+}
+
 // PIDFile returns the path of the background pid file.
 func PIDFile() (string, error) {
 	dir, err := RootDir()
@@ -122,16 +133,12 @@ func RemovePID() error {
 // background process writing to the log file. It returns the child's pid once
 // the child has confirmed it is alive by writing its pid file.
 func Spawn(args []string) (int, error) {
-	logPath, err := LogFile()
+	logf, err := OpenLog()
 	if err != nil {
-		return 0, err
-	}
-	dir, _ := RootDir()
-	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return 0, fmt.Errorf("open log file %s: %w", logPath, err)
+		return 0, fmt.Errorf("open log file: %w", err)
 	}
 	defer logf.Close()
+	dir, _ := RootDir()
 
 	exe, err := os.Executable()
 	if err != nil {
@@ -161,16 +168,16 @@ func Spawn(args []string) (int, error) {
 			// alive. This catches crashes shortly after the pid file was written.
 			time.Sleep(500 * time.Millisecond)
 			if err := processAlive(pid); err != nil {
-				return 0, fmt.Errorf("background process exited after startup; last log lines:\n%s", tail(logPath, 8))
+				return 0, fmt.Errorf("background process exited after startup; last log lines:\n%s", tail(logf.Name(), 8))
 			}
 			return pid, nil
 		}
 		if !time.Now().Before(deadline) {
-			return 0, fmt.Errorf("timeout waiting for background process; last log lines:\n%s", tail(logPath, 8))
+			return 0, fmt.Errorf("timeout waiting for background process; last log lines:\n%s", tail(logf.Name(), 8))
 		}
 		// Child exited before writing its pid file?
 		if err := processAlive(pid); err != nil {
-			return 0, fmt.Errorf("background process exited immediately; last log lines:\n%s", tail(logPath, 8))
+			return 0, fmt.Errorf("background process exited immediately; last log lines:\n%s", tail(logf.Name(), 8))
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
@@ -189,11 +196,17 @@ func tail(path string, n int) string {
 	return strings.Join(lines, "\n")
 }
 
-// Stop terminates the running daemon and removes its pid file.
+// Stop terminates the running watchdog and removes its pid file. A stale pid
+// file (left behind by a crash or hard kill such as taskkill /F or a task End)
+// is detected and cleaned up instead of erroring.
 func Stop() (int, error) {
 	pid, err := ReadPID()
 	if err != nil {
 		return 0, err
+	}
+	if err := processAlive(pid); err != nil {
+		_ = RemovePID()
+		return 0, fmt.Errorf("no running watchdog: pid %d is gone (stale pid file removed)", pid)
 	}
 	if err := terminate(pid); err != nil {
 		return 0, fmt.Errorf("stop pid %d: %w", pid, err)

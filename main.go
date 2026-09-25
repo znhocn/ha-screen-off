@@ -28,6 +28,7 @@ import (
 	_ "embed"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -84,6 +85,34 @@ func run() error {
 		explicit = true
 	}
 
+	// Windows: hide the console as the very first thing - before flag parsing
+	// or any output - when scroff owns it outright (a fresh console created by
+	// Task Scheduler or double-click), and honor an explicit -hide-console to
+	// force it. A shared console (running inside a terminal) is never hidden.
+	// No-op elsewhere.
+	//
+	// When the console was hidden, all stdout/stderr output is redirected to
+	// NUL: the window is gone, so nothing would be visible anyway - and a
+	// hidden-headless watchdog should stay silent. KeepHidden re-asserts
+	// SW_HIDE because some Windows builds re-display a hidden console on
+	// console I/O.
+	force := false
+	for _, a := range args {
+		if a == "-hide-console" || a == "--hide-console" {
+			force = true
+			break
+		}
+	}
+	hidden := winsys.HideIfOwned(force)
+	if hidden {
+		null, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		if err == nil {
+			os.Stdout = null
+			os.Stderr = null
+		}
+		go winsys.KeepHidden()
+	}
+
 	fs := flag.NewFlagSet("scroff "+cmd, flag.ContinueOnError)
 	configPath := fs.String("config", defaultConfigPath(), "path to JSON config file (default: ~/.config/scroff/config.json)")
 	url := fs.String("url", "", "Home Assistant base URL (overrides config)")
@@ -91,18 +120,11 @@ func run() error {
 	entity := fs.String("entity", "", "entity to watch, e.g. input_boolean.screen_power (overrides config)")
 	verbose := fs.Bool("verbose", false, "enable debug logging")
 	background := fs.Bool("d", false, "run serve in the background (daemon mode)")
-	hideConsole := fs.Bool("hide-console", false, "Windows only: hide this process's console window (for Task Scheduler logon tasks)")
+	_ = fs.Bool("hide-console", false, "Windows only: force-hide the console window (normally done automatically)")
 	showVersion := fs.Bool("v", false, "print version and exit")
 	showVersionLong := fs.Bool("version", false, "print version and exit")
 	if err := fs.Parse(args); err != nil {
 		return err
-	}
-
-	if *hideConsole {
-		// No-op outside Windows. Mats the black window a Task Scheduler logon
-		// task would otherwise flash onto the desktop. Call it as early as
-		// possible to minimize any visible frame.
-		winsys.HideConsoleWindow()
 	}
 
 	if *showVersion || *showVersionLong {
@@ -144,7 +166,11 @@ func run() error {
 	if *verbose {
 		cfg.Log.Level = "debug"
 	}
-	setupLogging(cfg.Log.Level)
+	// In silent/watchdog mode (hidden console - scheduled task, double-click)
+	// keep slog out of NUL: write to the daemon log file instead, so `scroff
+	// logs` shows what happened even though nothing is printed to a terminal.
+	// The -d child already writes there via its redirected stdout/stderr.
+	setupLogging(cfg.Log.Level, hidden && !daemon.Child())
 
 	switch cmd {
 	case "serve":
@@ -226,13 +252,18 @@ func cmdServe(cfg config.Config, configPath string) error {
 	}
 	defer release()
 
-	// Only advertise the daemon after everything above has validated, otherwise
-	// the parent would think startup succeeded while the child then dies.
+	// Record this instance's pid so `scroff stop` can terminate it - whether
+	// it runs as a scheduled-task foreground process or as a -d background
+	// daemon. Removed again on graceful shutdown; a hard kill (taskkill /F,
+	// task End) leaves a stale entry that Stop() detects and cleans up.
+	if err := daemon.WritePID(); err != nil {
+		slog.Warn("cannot write pid file", "error", err)
+	} else {
+		defer func() { _ = daemon.RemovePID() }()
+	}
+
 	if daemon.Child() {
 		slog.Info("background daemon", "pid", os.Getpid())
-		if err := daemon.WritePID(); err != nil {
-			slog.Warn("cannot write pid file", "error", err)
-		}
 	}
 
 	scr, err := screen.New(cfg.Screen.LinuxBackend)
@@ -308,7 +339,7 @@ Flags:
   -v, -version         print the version and exit
   -verbose             enable debug logging
   -d                   (serve only) run in the background
-  -hide-console        (Windows only) hide the console window - for scheduled tasks
+  -hide-console        (Windows only) force-hide the console window and silence all output (auto when run by a scheduled task)
 
 Without -config the tool looks for ~/.config/scroff/config.json.
 Built with the Go standard library only.
@@ -432,7 +463,9 @@ func cmdStatus(cfg config.Config, configPath string) error {
 }
 
 // setupLogging configures the slog default handler to the requested level.
-func setupLogging(level string) {
+// In silent watchdog runs (toFile=true) log lines go to ~/.config/scroff/
+// scroff.log instead of the (hidden/absent) terminal.
+func setupLogging(level string, toFile bool) {
 	var lvl slog.Level
 	switch strings.ToLower(level) {
 	case "debug":
@@ -444,5 +477,11 @@ func setupLogging(level string) {
 	default:
 		lvl = slog.LevelInfo
 	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lvl})))
+	out := io.Writer(os.Stderr)
+	if toFile {
+		if lf, err := daemon.OpenLog(); err == nil {
+			out = lf
+		}
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(out, &slog.HandlerOptions{Level: lvl})))
 }

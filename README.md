@@ -94,7 +94,8 @@ scroff version            # print the version (same as -v or -version)
 Flags: `-config PATH` choose the config file, `-url`/`-token`/`-entity` override
 values from config, `-verbose` enables debug logging, `-d` runs `serve` in the
 background, `-v`/`-version` print the version, `-hide-console` (Windows only)
-hides the console window of a scheduled/autostart run.
+force-hides the console window and silences all output (normally automatic -
+see "Run automatically").
 
 Running bare `scroff` (no subcommand) prints the usage summary; if no config
 file exists yet it instead points you at `scroff setup`.
@@ -112,10 +113,11 @@ scroff stop       # stop it
 ```
 
 Background mode writes a PID file and logs to
-`~/.config/scroff/scroff.log`; `stop` terminates the daemon - on Linux/macOS
-the SIGTERM handler also restores the screen to **on**; on Windows the process
-is force-killed (`taskkill /F`), so there the Home Assistant entity is the
-source of truth for the restore.
+`~/.config/scroff/scroff.log`; the watchdog records its pid there in
+foreground runs too (scheduled tasks included), so `stop` can terminate the
+running instance either way - on Linux/macOS the SIGTERM handler also restores
+the screen to **on**; on Windows the process is force-killed (`taskkill /F`),
+so there the Home Assistant entity is the source of truth for the restore.
 
 ## Home Assistant setup
 
@@ -227,15 +229,27 @@ in your interactive desktop session:
 
 ```powershell
 schtasks /Create /F /TN "HA Screen Off" ^
-  /TR "\"C:\Program Files\scroff\scroff.exe\" serve -config \"C:\Users\yourname\.config\scroff\config.json\" -hide-console" ^
+  /TR "\"C:\Program Files\scroff\scroff.exe\" serve -config \"C:\Users\yourname\.config\scroff\config.json\"" ^
   /SC ONLOGON /RL LIMITED
 ```
 
-The Windows binary is a plain console-subsystem program. Pass
-`-hide-console` to the scheduled task's command line: scroff then hides its
-own console window right at startup (via `GetConsoleWindow`/`ShowWindow`, no
-helper scripts or special subsystem needed), so **no black window pops up** -
-while all command-line interactions stay fully native.
+The Windows binary is a plain console-subsystem program. When the task (or a
+double-click) creates a console for scroff, scroff detects that the console is
+its own - via `GetConsoleProcessList`, only scroff is on it - and hides the
+window itself right at startup, so **no black window sits on the desktop**,
+redirects stdout/stderr to NUL (**fully silent**) and logs to
+`~/.config/scroff/scroff.log` instead - so `scroff logs` still works. The
+`-hide-console` flag exists only to force this in unusual setups (it also
+silences output); inside a terminal (a shared console) the window is never
+touched, so command-line output stays fully native.
+
+This gives a `serve -d`-style watchdog experience **without** the orphan
+problem: run it **foreground** (no `-d`). `serve -d` re-executes itself as a
+detached daemon outside the task's job object, so Task Scheduler shows the
+task as Running forever but "End" cannot stop the orphaned process. A silent
+foreground task process stays the task's direct child - Task Scheduler "End",
+`schtasks /End /TN "HA Screen Off"`, Task Manager, or `scroff stop` all
+terminate it, and it reclaims the screen on clean shutdown.
 
 > A **Windows service (NSSM, `sc.exe`, etc.) cannot control the screen or
 > detect input**: services run in **session 0**, isolated from your logged-on

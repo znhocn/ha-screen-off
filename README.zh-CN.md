@@ -70,7 +70,7 @@ scroff help               # 显示本帮助
 scroff version            # 打印版本号（等价 -v 或 -version）
 ```
 
-参数：`-config PATH` 指定配置文件，`-url`/`-token`/`-entity` 覆盖配置里的对应值，`-verbose` 开启调试日志，`-d` 让 `serve` 后台运行，`-v`/`-version` 打印版本号，`-hide-console`（仅 Windows）隐藏计划任务/自启动场景下的控制台窗口。
+参数：`-config PATH` 指定配置文件，`-url`/`-token`/`-entity` 覆盖配置里的对应值，`-verbose` 开启调试日志，`-d` 让 `serve` 后台运行，`-v`/`-version` 打印版本号，`-hide-console`（仅 Windows）强制隐藏控制台窗口并静默所有输出（通常自动，见"自动运行"章节）。
 
 直接运行 `scroff`（不带子命令）会显示帮助信息；如果配置文件还不存在，则提示你去跑 `scroff setup`。
 
@@ -84,7 +84,7 @@ scroff status     # 出问题时一键查看概览
 scroff stop       # 停止
 ```
 
-后台模式会写 PID 文件和日志到 `~/.config/scroff/scroff.log`；`stop` 终止守护进程——Linux/macOS 会通过 SIGTERM 处理器把屏幕恢复为点亮；Windows 上是强制终止（`taskkill /F`），屏幕恢复以 Home Assistant 中的实体状态为准。
+后台模式会写 PID 文件和日志到 `~/.config/scroff/scroff.log`；前台运行（包括计划任务启动的）也会把进程 pid 记在那里，因此 `stop` 两种方式都能结束——Linux/macOS 会通过 SIGTERM 处理器把屏幕恢复为点亮；Windows 上是强制终止（`taskkill /F`），屏幕恢复以 Home Assistant 中的实体状态为准。
 
 ## Home Assistant 配置
 
@@ -167,11 +167,13 @@ WantedBy=multi-user.target
 
 ```powershell
 schtasks /Create /F /TN "HA Screen Off" ^
-  /TR "\"C:\Program Files\scroff\scroff.exe\" serve -config \"C:\Users\yourname\.config\scroff\config.json\" -hide-console" ^
+  /TR "\"C:\Program Files\scroff\scroff.exe\" serve -config \"C:\Users\yourname\.config\scroff\config.json\"" ^
   /SC ONLOGON /RL LIMITED
 ```
 
-Windows 二进制是普通的控制台程序。在任务命令行里带上 `-hide-console` 后，scroff 启动时立即把自己的控制台窗口隐藏（用 `GetConsoleWindow`/`ShowWindow`，无需辅助脚本或特殊子系统），因此**不会弹黑窗口**；而所有命令行交互都是完全原生的。
+Windows 二进制是普通的控制台程序。当任务计划段（或双击）为 scroff 创建控制台时，scroff 会用 `GetConsoleProcessList` 判断该控制台是否只有自己，如果是就在启动时自动把窗口隐藏并把 stdout/stderr 重定向到 NUL（**完全静默**）、日志改写到 `~/.config/scroff/scroff.log`（所以 `scroff logs` 依然可用），因此**桌面上不会残留黑窗口**。`-hide-console` 参数只在特殊场景下强制隐藏用（同样会静默输出）；在终端里（共享控制台）绝不会隐藏，命令行输出完全原生。
+
+这就得到了 `serve -d` 式的看门狗体验，却又**没有孤儿进程问题**：**前台运行**（不要加 `-d`）。`serve -d` 会重新把自己变成脱离任务的独立守护进程，任务计划程序会一直显示"正在运行"且 "End" 结束不掉那个孤儿进程。而静默的前台任务进程始终是任务计划程序的直接子进程——任务计划里的"结束"、`schtasks /End /TN "HA Screen Off"`、任务管理器或 `scroff stop` 都能正常结束它，正常退出时还会恢复屏幕点亮。
 
 > **Windows 服务（NSSM、`sc.exe` 等）无法控制屏幕也无法检测输入**：服务运行在 **Session 0**，与登录用户的桌面隔离。`SC_MONITORPOWER` 广播到不了交互会话，`SetThreadExecutionState` 唤醒那边也没有显示器，`GetLastInputInfo` 只反映服务会话的（空）输入。Vista 之后"允许服务与桌面交互"这个选项就已失效。
 
