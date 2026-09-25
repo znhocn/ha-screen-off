@@ -47,8 +47,8 @@ Home Assistant (input_boolean.screen_power)  <-- 通过 REST + 事件流读取�
 # Linux（X11 用 xset，或 Wayland 用 wlopm）
 GOOS=linux  GOARCH=amd64 go build -o bin/scroff-linux  .
 
-# Windows / macOS（Intel / Apple Silicon）——普通控制台程序
-GOOS=windows GOARCH=amd64 go build -o bin/scroff.exe  .
+# Windows - GUI 子系统（-H=windowsgui，永不打开控制台窗口）；macOS（Intel / Apple Silicon）——普通控制台程序
+GOOS=windows GOARCH=amd64 go build -ldflags "-H=windowsgui" -o bin/scroff.exe  .
 GOOS=darwin  GOARCH=amd64 go build -o bin/scroff-mac   .
 GOOS=darwin  GOARCH=arm64 go build -o bin/scroff-mac-m1 .
 ```
@@ -70,7 +70,7 @@ scroff help               # 显示本帮助
 scroff version            # 打印版本号（等价 -v 或 -version）
 ```
 
-参数：`-config PATH` 指定配置文件，`-url`/`-token`/`-entity` 覆盖配置里的对应值，`-verbose` 开启调试日志，`-d` 让 `serve` 后台运行，`-v`/`-version` 打印版本号，`-hide-console`（仅 Windows）强制隐藏控制台窗口并静默所有输出（通常自动，见"自动运行"章节）。
+参数：`-config PATH` 指定配置文件，`-url`/`-token`/`-entity` 覆盖配置里的对应值，`-verbose` 开启调试日志，`-d` 让 `serve` 后台运行，`-v`/`-version` 打印版本号。
 
 直接运行 `scroff`（不带子命令）会显示帮助信息；如果配置文件还不存在，则提示你去跑 `scroff setup`。
 
@@ -171,9 +171,9 @@ schtasks /Create /F /TN "HA Screen Off" ^
   /SC ONLOGON /RL LIMITED
 ```
 
-Windows 二进制是普通的控制台程序。当任务计划段（或双击）为 scroff 创建控制台时，scroff 会用 `GetConsoleProcessList` 判断该控制台是否只有自己，如果是就在启动时自动把窗口隐藏并把 stdout/stderr 重定向到 NUL（**完全静默**）、日志改写到 `~/.config/scroff/scroff.log`（所以 `scroff logs` 依然可用），因此**桌面上不会残留黑窗口**。`-hide-console` 参数只在特殊场景下强制隐藏用（同样会静默输出）；在终端里（共享控制台）绝不会隐藏，命令行输出完全原生。
+Windows 二进制是 **GUI 子系统**程序（用 `-H=windowsgui` 构建），因此它**永远不会自己创建控制台窗口**——无论是任务计划段、双击还是任何方式启动都不会有黑窗口，也没有任何"控制台"可以被关闭而带走 scroff。从终端交互运行时，scroff 会挂到父级终端并把输出接到上面，命令行输出完全原生；被任务计划/自启动等"无头"方式拉起时没有可挂靠的控制台，于是保持静默且无窗口，日志改写到 `~/.config/scroff/scroff.log`（所以 `scroff logs` 依然可用）。
 
-这就得到了 `serve -d` 式的看门狗体验，却又**没有孤儿进程问题**。带不带 `-d` 都行——在计划任务里两者没有区别：Windows 上只有从交互终端启动时，`-d` 才会真正分离（重新 fork 成脱离任务 job 的守护进程）；当 scroff 由任务计划/自启动拉起（独占一个新的控制台）时，`-d` 原地不分离，作为任务的直接子进程运行，任务计划里的"结束"、`schtasks /End /TN "HA Screen Off"`、任务管理器或 `scroff stop` 都能正常结束它，正常退出时还会恢复屏幕点亮。因此那种任务 UI 永远结束不掉的分离孤儿进程，不会出现。
+这就得到了 `serve -d` 式的看门狗体验，却又**没有孤儿进程问题**。带不带 `-d` 都行——在计划任务里两者没有区别：`-d` 只有在从交互终端启动时才会真正分离（重新 fork 成脱离任务 job 的守护进程）；当 scroff 由任务计划/自启动拉起时没有可挂靠的控制台，`-d` 原地不分离，作为任务的直接子进程运行，任务计划里的"结束"、`schtasks /End /TN "HA Screen Off"`、任务管理器或 `scroff stop` 都能正常结束它，正常退出时还会恢复屏幕点亮。因此那种任务 UI 永远结束不掉的分离孤儿进程，不会出现。
 
 > **Windows 服务（NSSM、`sc.exe` 等）无法控制屏幕也无法检测输入**：服务运行在 **Session 0**，与登录用户的桌面隔离。`SC_MONITORPOWER` 广播到不了交互会话，`SetThreadExecutionState` 唤醒那边也没有显示器，`GetLastInputInfo` 只反映服务会话的（空）输入。Vista 之后"允许服务与桌面交互"这个选项就已失效。
 

@@ -39,13 +39,13 @@ import (
 	"time"
 
 	"scroff/internal/config"
+	"scroff/internal/console"
 	"scroff/internal/controller"
 	"scroff/internal/daemon"
 	"scroff/internal/ha"
 	"scroff/internal/input"
 	"scroff/internal/screen"
 	"scroff/internal/setup"
-	"scroff/internal/winsys"
 )
 
 //go:embed VERSION
@@ -85,32 +85,19 @@ func run() error {
 		explicit = true
 	}
 
-	// Windows: hide the console as the very first thing - before flag parsing
-	// or any output - when scroff owns it outright (a fresh console created by
-	// Task Scheduler or double-click), and honor an explicit -hide-console to
-	// force it. A shared console (running inside a terminal) is never hidden.
-	// No-op elsewhere.
+	// The Windows build is a GUI-subsystem executable (-H=windowsgui): it
+	// never creates a console of its own, so Task Scheduler / autostart runs
+	// are windowless and silent from the very start - there is no window to
+	// hide and no console whose lifetime could take scroff down. When launched
+	// interactively from a terminal, attach to the parent's console so normal
+	// command-line output still works. The detached -d child must NOT attach:
+	// it inherits the log file instead.
 	//
-	// When the console was hidden, all stdout/stderr output is redirected to
-	// NUL: the window is gone, so nothing would be visible anyway - and a
-	// hidden-headless watchdog should stay silent. KeepHidden re-asserts
-	// SW_HIDE because some Windows builds re-display a hidden console on
-	// console I/O.
-	force := false
-	for _, a := range args {
-		if a == "-hide-console" || a == "--hide-console" {
-			force = true
-			break
-		}
-	}
-	hidden := winsys.HideIfOwned(force)
-	if hidden {
-		null, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-		if err == nil {
-			os.Stdout = null
-			os.Stderr = null
-		}
-		go winsys.KeepHidden()
+	// attached=false (no parent console) therefore exactly marks a headless,
+	// autostart-style run. No-op outside Windows.
+	attached := true
+	if !daemon.Child() {
+		attached = console.Attach()
 	}
 
 	fs := flag.NewFlagSet("scroff "+cmd, flag.ContinueOnError)
@@ -120,7 +107,6 @@ func run() error {
 	entity := fs.String("entity", "", "entity to watch, e.g. input_boolean.screen_power (overrides config)")
 	verbose := fs.Bool("verbose", false, "enable debug logging")
 	background := fs.Bool("d", false, "run serve in the background (daemon mode)")
-	_ = fs.Bool("hide-console", false, "Windows only: force-hide the console window (normally done automatically)")
 	showVersion := fs.Bool("v", false, "print version and exit")
 	showVersionLong := fs.Bool("version", false, "print version and exit")
 	if err := fs.Parse(args); err != nil {
@@ -147,12 +133,14 @@ func run() error {
 	// Daemon mode: if this process is the spawned background child, keep going;
 	// otherwise re-exec ourselves detached and return.
 	//
-	// Exception: when launched by Task Scheduler / autostart we are already a
-	// managed watchdog (own fresh console => the hidden+silent path above), so
-	// "-d" must NOT detach - a detached child would escape the task's control
-	// and Task Scheduler could no longer end it. Setting -d there is harmless:
-	// scroff just runs as the direct, fully manageable foreground watchdog.
-	if cmd == "serve" && *background && !daemon.Child() && !hidden {
+	// Exception: when launched with no console (Task Scheduler / autostart, the
+	// headless case where console.Attach() found nothing to attach to), "-d"
+	// must NOT detach - a detached child would escape the task's control and
+	// could no longer be ended by Task Scheduler. Setting -d there is harmless:
+	// scroff just runs as the direct, fully manageable foreground watchdog,
+	// windowless and silent (GUI subsystem). From a real terminal -d detaches
+	// as usual.
+	if cmd == "serve" && *background && !daemon.Child() && attached {
 		return startBackground()
 	}
 
@@ -172,11 +160,11 @@ func run() error {
 	if *verbose {
 		cfg.Log.Level = "debug"
 	}
-	// In silent/watchdog mode (hidden console - scheduled task, double-click)
-	// keep slog out of NUL: write to the daemon log file instead, so `scroff
-	// logs` shows what happened even though nothing is printed to a terminal.
-	// The -d child already writes there via its redirected stdout/stderr.
-	setupLogging(cfg.Log.Level, hidden && !daemon.Child())
+	// In headless watchdog runs (scheduled task / autostart: no console to
+	// attach to) keep slog out of the void: write to the daemon log file, so
+	// `scroff logs` shows what happened even though nothing is printed. The -d
+	// child already writes there via its redirected stdout/stderr.
+	setupLogging(cfg.Log.Level, !attached && cmd == "serve")
 
 	switch cmd {
 	case "serve":
@@ -345,7 +333,6 @@ Flags:
   -v, -version         print the version and exit
   -verbose             enable debug logging
   -d                   (serve only) run in the background
-  -hide-console        (Windows only) force-hide the console window and silence all output (auto when run by a scheduled task)
 
 Without -config the tool looks for ~/.config/scroff/config.json.
 Built with the Go standard library only.
@@ -469,8 +456,8 @@ func cmdStatus(cfg config.Config, configPath string) error {
 }
 
 // setupLogging configures the slog default handler to the requested level.
-// In silent watchdog runs (toFile=true) log lines go to ~/.config/scroff/
-// scroff.log instead of the (hidden/absent) terminal.
+// In headless watchdog runs (toFile=true) log lines go to
+// ~/.config/scroff/scroff.log instead of a (nonexistent) terminal.
 func setupLogging(level string, toFile bool) {
 	var lvl slog.Level
 	switch strings.ToLower(level) {

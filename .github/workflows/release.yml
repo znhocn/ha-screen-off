@@ -77,9 +77,15 @@ jobs:
         run: |
           artifact="dist/scroff-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}"
           mkdir -p dist
-          # Plain console-subsystem build on every platform. Windows logon
-          # tasks pass "-hide-console" so scroff hides its own console window.
-          go build -trimpath -o "$artifact" .
+          ldflags=""
+          # Windows: build as a GUI-subsystem binary (-H=windowsgui) so it
+          # never opens a console window - scheduled-task / autostart runs are
+          # windowless and silent, and interactive runs attach to the parent's
+          # console at startup for native command-line output.
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            ldflags="-H=windowsgui"
+          fi
+          go build -trimpath -ldflags "$ldflags" -o "$artifact" .
           chmod +x "$artifact"
 
       - name: Upload artifact

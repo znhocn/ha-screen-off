@@ -68,8 +68,8 @@ machine:
 # Linux (X11 via xset, or Wayland via wlopm)
 GOOS=linux  GOARCH=amd64 go build -o bin/scroff-linux  .
 
-# Windows / macOS (Intel / Apple Silicon) - plain console binaries
-GOOS=windows GOARCH=amd64 go build -o bin/scroff.exe  .
+# Windows - GUI-subsystem (-H=windowsgui, never opens a console window); macOS (Intel / Apple Silicon) - plain console binaries
+GOOS=windows GOARCH=amd64 go build -ldflags "-H=windowsgui" -o bin/scroff.exe  .
 GOOS=darwin  GOARCH=amd64 go build -o bin/scroff-mac   .
 GOOS=darwin  GOARCH=arm64 go build -o bin/scroff-mac-m1 .
 ```
@@ -93,9 +93,7 @@ scroff version            # print the version (same as -v or -version)
 
 Flags: `-config PATH` choose the config file, `-url`/`-token`/`-entity` override
 values from config, `-verbose` enables debug logging, `-d` runs `serve` in the
-background, `-v`/`-version` print the version, `-hide-console` (Windows only)
-force-hides the console window and silences all output (normally automatic -
-see "Run automatically").
+background, `-v`/`-version` print the version.
 
 Running bare `scroff` (no subcommand) prints the usage summary; if no config
 file exists yet it instead points you at `scroff setup`.
@@ -233,22 +231,21 @@ schtasks /Create /F /TN "HA Screen Off" ^
   /SC ONLOGON /RL LIMITED
 ```
 
-The Windows binary is a plain console-subsystem program. When the task (or a
-double-click) creates a console for scroff, scroff detects that the console is
-its own - via `GetConsoleProcessList`, only scroff is on it - and hides the
-window itself right at startup, so **no black window sits on the desktop**,
-redirects stdout/stderr to NUL (**fully silent**) and logs to
-`~/.config/scroff/scroff.log` instead - so `scroff logs` still works. The
-`-hide-console` flag exists only to force this in unusual setups (it also
-silences output); inside a terminal (a shared console) the window is never
-touched, so command-line output stays fully native.
+The Windows binary is a **GUI-subsystem** executable (built with
+`-H=windowsgui`), so it **never creates a console window of its own** - not
+when launched by the task, not by double-click, not ever. There is no "black
+window" to hide and no console whose closing could take scroff down. When run
+interactively from a terminal, scroff attaches to the parent console and prints
+natively; when launched headless (Task Scheduler, autostart) there is nothing
+to attach to, so it stays silent and windowless, and logging goes to
+`~/.config/scroff/scroff.log` instead, so `scroff logs` still works.
 
 This gives a `serve -d`-style watchdog experience **without** the orphan
 problem. You may pass `-d` or omit it - it makes no difference inside a
-scheduled task: on Windows, `-d` detaches (re-executes as a daemon outside the
-task's job object) only when launched from an interactive terminal. When Task
-Scheduler / autostart starts scroff (it owns a fresh console), `-d` stays in
-place and runs as the task's direct child, so Task Scheduler "End",
+scheduled task: `-d` detaches (re-executes as a daemon outside the task's job
+object) only when launched from an interactive terminal. When Task Scheduler /
+autostart starts scroff there is no console to attach to, so `-d` stays in
+place and runs as the task's direct child - Task Scheduler "End",
 `schtasks /End /TN "HA Screen Off"`, Task Manager, or `scroff stop` all
 terminate it, and it reclaims the screen on clean shutdown. An orphaned
 detached daemon (which the task UI can never end) therefore cannot happen.
