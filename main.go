@@ -167,9 +167,18 @@ func run() error {
 		return startBackground()
 	}
 
-	cfg, err := config.Load(*configPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+	// Only commands that actually read the config need it loaded. Managing
+	// commands (setup/stop/logs/version/help) must work even when the config
+	// file is corrupt, otherwise a broken config would make it impossible to
+	// run `scroff setup` to repair it or `scroff stop` to quit the daemon.
+	cfg := config.Default()
+	switch cmd {
+	case "serve", "off", "on", "status":
+		loaded, err := config.Load(*configPath)
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+		cfg = loaded
 	}
 	if *url != "" {
 		cfg.HA.URL = *url
@@ -200,7 +209,7 @@ func run() error {
 	case "status":
 		return cmdStatus(cfg, *configPath)
 	case "setup", "init":
-		return cmdSetup()
+		return cmdSetup(*configPath)
 	case "version":
 		cmdVersion()
 		return nil
@@ -369,9 +378,10 @@ func cmdServe(cfg config.Config, configPath string) error {
 	return nil
 }
 
-// cmdSetup interactively generates the default config file.
-func cmdSetup() error {
-	path, err := setup.Interactive(os.Stdin, os.Stdout)
+// cmdSetup interactively generates a config file. An explicit --config path is
+// honored; otherwise the default ~/.config/scroff/config.json is used.
+func cmdSetup(configPath string) error {
+	path, err := setup.Interactive(os.Stdin, os.Stdout, configPath)
 	if err != nil {
 		return err
 	}

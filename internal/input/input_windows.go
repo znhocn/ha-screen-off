@@ -44,7 +44,9 @@ func (w *windowsWatcher) IdleSince() time.Duration {
 	info := lastInputInfo{cbSize: uint32(unsafe.Sizeof(lastInputInfo{}))}
 	r, _, _ := procGII.Call(uintptr(unsafe.Pointer(&info)))
 	if uintptr(r) == 0 {
-		return 0
+		// Unknown, not "active": -1 makes Controller.wakeEligible skip a wake
+		// instead of treating the failed probe as user input.
+		return -1
 	}
 	now := getTick()
 	if info.dwTime > now {

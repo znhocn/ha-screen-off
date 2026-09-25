@@ -117,28 +117,33 @@ func (c *Controller) handleHAState(st string) {
 		return // steady state, nothing to do
 	}
 	prev := c.lastState
+
+	switch st {
+	case ha.StateOff:
+		if c.offMode {
+			c.lastState = st
+			return
+		}
+		c.enterOffMode()
+	case ha.StateOn:
+		// Only clear off-mode once the screen actually came back on. If On()
+		// fails, keep offMode so the input watchdog keeps running and a later
+		// HA event or input retries the wake instead of giving up silently.
+		if err := c.scr.On(); err != nil {
+			slog.Warn("failed to turn screen on", "error", err)
+			return
+		}
+		c.offMode = false
+	default:
+		slog.Warn("ignoring unexpected entity state", "state", st)
+		c.lastState = st
+		return
+	}
 	c.lastState = st
 	if prev == "" {
 		slog.Info("home assistant state observed", "state", st)
 	} else {
 		slog.Info("home assistant state changed", "from", prev, "to", st)
-	}
-
-	switch st {
-	case ha.StateOff:
-		if c.offMode {
-			return
-		}
-		c.enterOffMode()
-	case ha.StateOn:
-		if c.offMode {
-			c.offMode = false
-		}
-		if err := c.scr.On(); err != nil {
-			slog.Warn("failed to turn screen on", "error", err)
-		}
-	default:
-		slog.Warn("ignoring unexpected entity state", "state", st)
 	}
 }
 
@@ -173,11 +178,13 @@ func (c *Controller) watch() {
 	// (last input was seconds ago) would wake the screen instantly.
 	if wakeEligible(idle, c.activeThreshold, c.offSince, time.Now()) {
 		slog.Info("user input detected after screen-off, exiting off-mode", "idle", idle.Round(time.Millisecond))
-		c.offMode = false
+		// Only exit off-mode once the screen is actually back on; a failed
+		// wake keeps the watchdog watching so a later input can retry.
 		if err := c.scr.On(); err != nil {
 			slog.Warn("failed to wake screen", "error", err)
 			return
 		}
+		c.offMode = false
 		// Keep Home Assistant in sync so a later "off" toggle still works.
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()

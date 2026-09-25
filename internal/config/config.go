@@ -53,6 +53,18 @@ type LogConfig struct {
 	Verbose bool `json:"verbose"`
 }
 
+// Upper bounds for time-derived values. They keep main.go's
+// time.Duration(value)*unit multiplications from overflowing into negative
+// durations (which would panic inside time.NewTicker), since only values that
+// are absurdly large could ever cause that.
+const (
+	maxPollIntervalS     = 3600
+	maxTimeoutS          = 3600
+	maxForceOffIntervalS = 86400
+	maxActiveThresholdMs = 3600000 // 1h
+	maxWatchIntervalMs   = 60000
+)
+
 // Default returns a Config populated with sensible defaults.
 func Default() Config {
 	return Config{
@@ -96,6 +108,18 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+// bounded clamps a value into [1, max]; out-of-range values fall back to the
+// sane default instead.
+func bounded(v, def, max int) int {
+	if v <= 0 {
+		return def
+	}
+	if v > max {
+		return max
+	}
+	return v
+}
+
 func applyDefaults(cfg Config) Config {
 	d := Default()
 	if cfg.HA.URL == "" {
@@ -107,24 +131,14 @@ func applyDefaults(cfg Config) Config {
 	if cfg.HA.EntityID == "" {
 		cfg.HA.EntityID = d.HA.EntityID
 	}
-	if cfg.HA.PollIntervalS <= 0 {
-		cfg.HA.PollIntervalS = d.HA.PollIntervalS
-	}
-	if cfg.HA.TimeoutS <= 0 {
-		cfg.HA.TimeoutS = d.HA.TimeoutS
-	}
+	cfg.HA.PollIntervalS = bounded(cfg.HA.PollIntervalS, d.HA.PollIntervalS, maxPollIntervalS)
+	cfg.HA.TimeoutS = bounded(cfg.HA.TimeoutS, d.HA.TimeoutS, maxTimeoutS)
 	if cfg.Screen.LinuxBackend == "" {
 		cfg.Screen.LinuxBackend = d.Screen.LinuxBackend
 	}
-	if cfg.Screen.ForceOffIntervalS <= 0 {
-		cfg.Screen.ForceOffIntervalS = d.Screen.ForceOffIntervalS
-	}
-	if cfg.Screen.ActiveThresholdMs <= 0 {
-		cfg.Screen.ActiveThresholdMs = d.Screen.ActiveThresholdMs
-	}
-	if cfg.Screen.WatchIntervalMs <= 0 {
-		cfg.Screen.WatchIntervalMs = d.Screen.WatchIntervalMs
-	}
+	cfg.Screen.ForceOffIntervalS = bounded(cfg.Screen.ForceOffIntervalS, d.Screen.ForceOffIntervalS, maxForceOffIntervalS)
+	cfg.Screen.ActiveThresholdMs = bounded(cfg.Screen.ActiveThresholdMs, d.Screen.ActiveThresholdMs, maxActiveThresholdMs)
+	cfg.Screen.WatchIntervalMs = bounded(cfg.Screen.WatchIntervalMs, d.Screen.WatchIntervalMs, maxWatchIntervalMs)
 	if cfg.Log.Level == "" {
 		cfg.Log.Level = d.Log.Level
 	}

@@ -147,6 +147,10 @@ const (
 // streamIdleTimeout - a normal refresh, not a failure.
 var errStreamIdle = errors.New("home assistant event stream idle")
 
+// errAuthFailed marks a stream rejected with 401/403: the token is wrong or
+// lacks scope, so retrying every few seconds would hammer HA forever.
+var errAuthFailed = errors.New("home assistant event stream authentication failed")
+
 // Poll reports entity state changes to onChange. It drives two layers:
 //
 //   - a guaranteed polling loop every interval - the safety net. Even when a
@@ -171,6 +175,15 @@ func (c *Client) Poll(ctx context.Context, interval time.Duration, onChange func
 			// No events for a long while (proxies can silently swallow idle
 			// connections). Just reconnect; the poll loop covers the gap.
 			continue
+		}
+		if err == errAuthFailed {
+			// Wrong token or insufficient scope: every retry would fail the
+			// same way. Fall back to plain polling (the guaranteed safety net);
+			// a restart picks the stream back up.
+			c.setMode("polling")
+			slog.Warn("home assistant event stream error - token rejected, falling back to polling only", "error", err)
+			<-ctx.Done()
+			return
 		}
 		c.setMode("polling")
 		if time.Since(time.Unix(0, c.lastLog.Load())) > 30*time.Second {
@@ -210,6 +223,9 @@ func (c *Client) streamAndRead(ctx context.Context, onChange func(state string))
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return errAuthFailed
+		}
 		return fmt.Errorf("ha: GET %s -> %s", streamPath, resp.Status)
 	}
 	c.setMode("stream")
@@ -237,10 +253,10 @@ func (c *Client) streamAndRead(ctx context.Context, onChange func(state string))
 		}
 	}()
 
-	rd := bufio.NewReader(resp.Body)
+	rd := bufio.NewReaderSize(resp.Body, 1<<16)
 	var evType, data string
 	for {
-		line, err := rd.ReadString('\n')
+		line, ok, err := readSSELine(rd)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -250,6 +266,13 @@ func (c *Client) streamAndRead(ctx context.Context, onChange func(state string))
 			}
 			return err
 		}
+		if !ok {
+			continue // an over-long line was read and discarded
+		}
+		// Any complete line proves the connection is alive (HA sends ~50s
+		// pings), so keep the rotation timer honest instead of needlessly
+		// reconnecting a perfectly healthy stream every streamIdleTimeout.
+		idle.Reset(streamIdleTimeout)
 		line = strings.TrimRight(line, "\r\n")
 		switch {
 		case strings.HasPrefix(line, "event: "):
@@ -266,6 +289,26 @@ func (c *Client) streamAndRead(ctx context.Context, onChange func(state string))
 			evType, data = "", ""
 		}
 	}
+}
+
+// readSSELine reads one SSE line with bounded memory: the bufio buffer caps
+// the accumulated fragment, and a line longer than the buffer is drained and
+// discarded (ok=false) rather than grown without limit.
+func readSSELine(rd *bufio.Reader) (line string, ok bool, err error) {
+	frag, err := rd.ReadSlice('\n')
+	if err == nil {
+		return string(frag), true, nil
+	}
+	if err != bufio.ErrBufferFull {
+		return string(frag), true, err // io.EOF or a stream error
+	}
+	for err == bufio.ErrBufferFull {
+		_, err = rd.ReadSlice('\n')
+	}
+	if err != nil && err != io.EOF {
+		return "", true, err
+	}
+	return "", false, nil // over-long line swallowed; skip processing it
 }
 
 // streamEntityState extracts the new entity state from an SSE state_changed

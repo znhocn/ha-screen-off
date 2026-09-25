@@ -40,14 +40,15 @@ func ConfigPath() (string, error) {
 }
 
 // Interactive walks the user through the config values (defaults are shown and
-// accepted with an empty answer), then writes the file. Returns the path that
-// was written.
-func Interactive(r io.Reader, w io.Writer) (string, error) {
+// accepted with an empty answer), then writes the file. path is the config
+// file to write; "" means the default ~/.config/scroff/config.json. Returns
+// the path that was written.
+func Interactive(r io.Reader, w io.Writer, path string) (string, error) {
 	p := &prompter{r: bufio.NewReader(r), w: w}
 
 	cfg := config.Default()
 	cfg.HA.URL = p.text("Home Assistant base URL", cfg.HA.URL, false)
-	token, err := p.required("Long-lived access token (Home Assistant > user > Security)", "token")
+	token, err := p.required("Long-lived access token (Home Assistant > user > Security)", "token", true)
 	if err != nil {
 		return "", err
 	}
@@ -67,9 +68,12 @@ func Interactive(r io.Reader, w io.Writer) (string, error) {
 	cfg.Screen.WatchIntervalMs = p.intQ("Watchdog resolution (ms)", cfg.Screen.WatchIntervalMs)
 	cfg.Log.Level = p.text("Log level (debug/info/warn/error)", cfg.Log.Level, false)
 
-	path, err := ConfigPath()
-	if err != nil {
-		return "", err
+	if path == "" {
+		var err error
+		path, err = ConfigPath()
+		if err != nil {
+			return "", err
+		}
 	}
 	if _, statErr := os.Stat(path); statErr == nil {
 		overwrite := p.boolQ(fmt.Sprintf("%s already exists - overwrite?", path), true)
@@ -114,12 +118,19 @@ func (p *prompter) text(label, def string, secret bool) string {
 	return line
 }
 
-// required reads a non-empty value (no default). It fails instead of looping
+// required reads a non-empty value (no default). secret disables terminal echo
+// while the answer is typed (used for tokens). It fails instead of looping
 // forever when the input stream ends (e.g. `scroff setup < /dev/null`).
-func (p *prompter) required(label, what string) (string, error) {
+func (p *prompter) required(label, what string, secret bool) (string, error) {
 	for {
 		fmt.Fprintf(p.w, "%s: ", label)
-		line, err := p.r.ReadString('\n')
+		var line string
+		var err error
+		if secret {
+			line, err = p.readHidden()
+		} else {
+			line, err = p.r.ReadString('\n')
+		}
 		// A final line without a trailing newline (EOF after content) is still
 		// a valid answer; anything else after EOF means the stream ran out.
 		switch {
@@ -134,6 +145,19 @@ func (p *prompter) required(label, what string) (string, error) {
 		}
 		fmt.Fprintf(p.w, "%s must not be empty, try again.\n", what)
 	}
+}
+
+// readHidden reads a line with the terminal echo disabled. When stdin is not a
+// terminal (pipes, redirects) echo control is skipped without error; nothing is
+// echoed on those anyway.
+func (p *prompter) readHidden() (string, error) {
+	restore, err := hideStdinEcho()
+	line, rerr := p.r.ReadString('\n')
+	if err == nil {
+		restore()
+	}
+	fmt.Fprintln(p.w)
+	return line, rerr
 }
 
 func (p *prompter) intQ(label string, def int) int {

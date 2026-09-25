@@ -17,9 +17,10 @@ import (
 // watchdog probes every few hundred ms while the screen is off.
 
 type macosWatcher struct {
-	mu       sync.Mutex
-	lastAt   time.Time
-	lastIdle time.Duration
+	mu        sync.Mutex
+	lastAt    time.Time
+	lastIdle  time.Duration
+	haveCache bool
 }
 
 // newPlatform is the macOS entry point.
@@ -34,12 +35,17 @@ func newPlatform() (Watcher, error) {
 func (w *macosWatcher) IdleSince() time.Duration {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if time.Since(w.lastAt) < time.Second {
+	if w.haveCache && time.Since(w.lastAt) < time.Second {
 		return w.lastIdle
 	}
 	w.lastAt = time.Now()
 	out, err := exec.Command("ioreg", "-c", "IOHIDSystem").Output()
 	if err != nil {
+		// Unknown, not "active": -1 makes Controller.wakeEligible skip a wake
+		// instead of treating a transient probe failure as user input.
+		if !w.haveCache {
+			return -1
+		}
 		return w.lastIdle // transient failure: keep the previous reading
 	}
 	// Line looks like: "...  "HIDIdleTime" = 1234567890"
@@ -55,8 +61,12 @@ func (w *macosWatcher) IdleSince() time.Duration {
 		if err != nil {
 			continue
 		}
+		w.haveCache = true
 		w.lastIdle = time.Duration(ns) * time.Nanosecond
 		return w.lastIdle
+	}
+	if !w.haveCache {
+		return -1
 	}
 	return w.lastIdle
 }

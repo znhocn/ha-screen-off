@@ -115,8 +115,12 @@ func ReadPID() (int, error) {
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	pid, err := strconv.Atoi(strings.TrimSpace(lines[0]))
-	if err != nil {
-		return 0, fmt.Errorf("corrupt pid file %s: %w", path, err)
+	// pid 0 / negative numbers are never written by WritePID (always a real
+	// os.Getpid()). They would otherwise make Stop run kill(0/-1, SIGTERM),
+	// signalling this process's whole group or everything we have permission
+	// for - so treat them as corrupt instead of acting on them.
+	if err != nil || pid <= 0 {
+		return 0, fmt.Errorf("corrupt pid file %s: invalid pid", path)
 	}
 	return pid, nil
 }
@@ -199,6 +203,10 @@ func Spawn(args []string) (int, error) {
 			return pid, nil
 		}
 		if !time.Now().Before(deadline) {
+			// The child never confirmed startup. Don't leave it running as an
+			// orphan that could later grab the single-instance lock behind the
+			// user's back; terminate it best-effort before failing.
+			_ = terminate(pid)
 			return 0, spawnFail("timed out waiting for the background process to fully start", logf.Name())
 		}
 		// Child exited before writing its pid file?

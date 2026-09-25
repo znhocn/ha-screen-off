@@ -150,8 +150,14 @@ func (w *evdevWatcher) readLoop(fd int) {
 		if err != nil {
 			return // device unplugged or unreadable - stop watching this one
 		}
-		if parseIsActivity(buf[:n]) {
-			w.last.Store(time.Now().UnixNano())
+		if ts, ok := parseIsActivity(buf[:n]); ok {
+			// Use the kernel's own event timestamp, not time.Now(): a buffer
+			// that still holds events queued before the screen turned off must
+			// not count as fresh input (see Controller.wakeEligible).
+			if ts.IsZero() {
+				ts = time.Now() // virtual devices may not fill Sec/Usec
+			}
+			w.last.Store(ts.UnixNano())
 		}
 	}
 }
@@ -169,9 +175,11 @@ func (w *evdevWatcher) removeFd(fd int) {
 	w.mu.Unlock()
 }
 
-// parseIsActivity returns true if the raw bytes contain a meaningful HID input
-// event (key press/release, mouse movement/scroll, absolute position).
-func parseIsActivity(b []byte) bool {
+// parseIsActivity returns the timestamp of the most recent HID input event in
+// the raw bytes (key press/release, mouse movement/scroll, absolute position)
+// and whether such an event was found.
+func parseIsActivity(b []byte) (time.Time, bool) {
+	var last time.Time
 	for len(b) >= 24 {
 		ev := inputEvent{
 			Sec:   int64(binary.LittleEndian.Uint64(b[0:8])),
@@ -181,11 +189,11 @@ func parseIsActivity(b []byte) bool {
 			Value: int32(binary.LittleEndian.Uint32(b[20:24])),
 		}
 		if ev.Type == evKey || ev.Type == evRel || ev.Type == evAbs {
-			return true
+			last = time.Unix(ev.Sec, ev.Usec*1000)
 		}
 		b = b[24:]
 	}
-	return false
+	return last, !last.IsZero()
 }
 
 func (w *evdevWatcher) IdleSince() time.Duration {
@@ -218,9 +226,10 @@ func (w *evdevWatcher) Close() {
 // few hundred ms while the screen is off; a cached value (1s TTL) keeps that
 // from spawning a subprocess 4x/second.
 type xprintidleWatcher struct {
-	mu       sync.Mutex
-	lastAt   time.Time
-	lastIdle time.Duration
+	mu        sync.Mutex
+	lastAt    time.Time
+	lastIdle  time.Duration
+	haveCache bool
 }
 
 func newXprintidle() (Watcher, error) {
@@ -236,18 +245,27 @@ func newXprintidle() (Watcher, error) {
 func (x *xprintidleWatcher) IdleSince() time.Duration {
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	if time.Since(x.lastAt) < time.Second {
+	if x.haveCache && time.Since(x.lastAt) < time.Second {
 		return x.lastIdle
 	}
 	x.lastAt = time.Now()
 	out, err := exec.Command("xprintidle").Output()
 	if err != nil {
+		// Unknown, not "active": -1 makes Controller.wakeEligible skip a wake
+		// instead of treating a transient probe failure as user input.
+		if !x.haveCache {
+			return -1
+		}
 		return x.lastIdle // transient failure: keep the previous reading
 	}
 	ms, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
 	if err != nil {
+		if !x.haveCache {
+			return -1
+		}
 		return x.lastIdle
 	}
+	x.haveCache = true
 	x.lastIdle = time.Duration(ms) * time.Millisecond
 	return x.lastIdle
 }
