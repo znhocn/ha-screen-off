@@ -113,7 +113,7 @@ func (c *Controller) syncFromHA(ctx context.Context) error {
 // transitions (dedupe), and logs every observed change so it is always visible
 // whether the tool is seeing the entity state or not.
 func (c *Controller) handleHAState(st string) {
-	if st == c.lastState {
+	if st == c.lastState && (st != ha.StateOff || c.offMode) {
 		return // steady state, nothing to do
 	}
 	prev := c.lastState

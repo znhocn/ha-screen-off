@@ -88,12 +88,12 @@ func (c *Client) State(ctx context.Context) (string, error) {
 
 // TurnOn turns the entity on (e.g. input_boolean.turn_on).
 func (c *Client) TurnOn(ctx context.Context) error {
-	return c.callService(ctx, c.domain+".turn_on")
+	return c.callService(ctx, c.domain+"/turn_on")
 }
 
 // TurnOff turns the entity off.
 func (c *Client) TurnOff(ctx context.Context) error {
-	return c.callService(ctx, c.domain+".turn_off")
+	return c.callService(ctx, c.domain+"/turn_off")
 }
 
 func (c *Client) callService(ctx context.Context, service string) error {
