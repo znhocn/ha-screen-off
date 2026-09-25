@@ -1,4 +1,4 @@
-name: release
+name: Release
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   test:
-    name: vet + test
+    name: Vet + Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,7 +41,7 @@ jobs:
         run: go test ./...
 
   build:
-    name: build (${{ matrix.os }}/${{ matrix.arch }})
+    name: Build (${{ matrix.os }}/${{ matrix.arch }})
     needs: test
     runs-on: ubuntu-latest
     strategy:
@@ -87,7 +87,7 @@ jobs:
           path: dist/
 
   release:
-    name: publish release
+    name: Publish Release
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -99,7 +99,7 @@ jobs:
       - name: Build checksums
         run: |
           cd dist
-          find . -type f -exec sha256sum "{}" + > SHA256SUMS.txt
+          find . -type f ! -name SHA256SUMS.txt -exec sha256sum "{}" + > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Publish release
