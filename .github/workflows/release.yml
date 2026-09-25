@@ -111,3 +111,6 @@ jobs:
           name: HA Screen Off ${{ github.ref_name }}
           files: dist/**
           fail_on_unmatched_files: true
+          # A forced re-push of the same tag (e.g. to ship a hotfix) must
+          # update the existing release instead of failing with 422.
+          update_release: true
