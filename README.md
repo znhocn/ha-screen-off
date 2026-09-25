@@ -244,12 +244,14 @@ silences output); inside a terminal (a shared console) the window is never
 touched, so command-line output stays fully native.
 
 This gives a `serve -d`-style watchdog experience **without** the orphan
-problem: run it **foreground** (no `-d`). `serve -d` re-executes itself as a
-detached daemon outside the task's job object, so Task Scheduler shows the
-task as Running forever but "End" cannot stop the orphaned process. A silent
-foreground task process stays the task's direct child - Task Scheduler "End",
+problem. You may pass `-d` or omit it - it makes no difference inside a
+scheduled task: on Windows, `-d` detaches (re-executes as a daemon outside the
+task's job object) only when launched from an interactive terminal. When Task
+Scheduler / autostart starts scroff (it owns a fresh console), `-d` stays in
+place and runs as the task's direct child, so Task Scheduler "End",
 `schtasks /End /TN "HA Screen Off"`, Task Manager, or `scroff stop` all
-terminate it, and it reclaims the screen on clean shutdown.
+terminate it, and it reclaims the screen on clean shutdown. An orphaned
+detached daemon (which the task UI can never end) therefore cannot happen.
 
 > A **Windows service (NSSM, `sc.exe`, etc.) cannot control the screen or
 > detect input**: services run in **session 0**, isolated from your logged-on

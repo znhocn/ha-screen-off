@@ -146,7 +146,13 @@ func run() error {
 
 	// Daemon mode: if this process is the spawned background child, keep going;
 	// otherwise re-exec ourselves detached and return.
-	if cmd == "serve" && *background && !daemon.Child() {
+	//
+	// Exception: when launched by Task Scheduler / autostart we are already a
+	// managed watchdog (own fresh console => the hidden+silent path above), so
+	// "-d" must NOT detach - a detached child would escape the task's control
+	// and Task Scheduler could no longer end it. Setting -d there is harmless:
+	// scroff just runs as the direct, fully manageable foreground watchdog.
+	if cmd == "serve" && *background && !daemon.Child() && !hidden {
 		return startBackground()
 	}
 
