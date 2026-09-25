@@ -1,8 +1,7 @@
 //go:build !windows
 
-// Package console bridges the GUI-subsystem Windows build back to a
-// terminal. Non-Windows builds are ordinary console programs, so Attach is a
-// no-op: the process already has standard I/O attached.
+// Package console prepares standard I/O for platform-specific console
+// behavior. Non-Windows builds already have working standard I/O.
 package console
 
 // Attach is a no-op on non-Windows platforms; it reports that a console is

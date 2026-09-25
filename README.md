@@ -68,8 +68,8 @@ machine:
 # Linux (X11 via xset, or Wayland via wlopm)
 GOOS=linux  GOARCH=amd64 go build -o bin/scroff-linux  .
 
-# Windows - GUI-subsystem (-H=windowsgui, never opens a console window); macOS (Intel / Apple Silicon) - plain console binaries
-GOOS=windows GOARCH=amd64 go build -ldflags "-H=windowsgui" -o bin/scroff.exe  .
+# Windows / macOS (Intel / Apple Silicon) - console binaries
+GOOS=windows GOARCH=amd64 go build -o bin/scroff.exe  .
 GOOS=darwin  GOARCH=amd64 go build -o bin/scroff-mac   .
 GOOS=darwin  GOARCH=arm64 go build -o bin/scroff-mac-m1 .
 ```
@@ -231,21 +231,21 @@ schtasks /Create /F /TN "HA Screen Off" ^
   /SC ONLOGON /RL LIMITED
 ```
 
-The Windows binary is a **GUI-subsystem** executable (built with
-`-H=windowsgui`), so it **never creates a console window of its own** - not
-when launched by the task, not by double-click, not ever. There is no "black
-window" to hide and no console whose closing could take scroff down. When run
-interactively from a terminal, scroff attaches to the parent console and prints
-natively; when launched headless (Task Scheduler, autostart) there is nothing
-to attach to, so it stays silent and windowless, and logging goes to
-`~/.config/scroff/scroff.log` instead, so `scroff logs` still works.
+The Windows binary is a console-subsystem executable, so PowerShell, cmd,
+and other shells wait for each command and preserve normal output and
+redirection. When Task Scheduler, Explorer, or another non-interactive launcher
+creates a console owned only by scroff, it immediately detaches from and
+silences that console, which closes its transient terminal tab or window. A
+shared interactive terminal is never touched. Headless watchdog
+logging goes to `~/.config/scroff/scroff.log` instead, so `scroff logs` still
+works.
 
 This gives a `serve -d`-style watchdog experience **without** the orphan
 problem. You may pass `-d` or omit it - it makes no difference inside a
 scheduled task: `-d` detaches (re-executes as a daemon outside the task's job
 object) only when launched from an interactive terminal. When Task Scheduler /
-autostart starts scroff there is no console to attach to, so `-d` stays in
-place and runs as the task's direct child - Task Scheduler "End",
+autostart starts scroff with a detached owned console, `-d` stays in place and
+runs as the task's direct child - Task Scheduler "End",
 `schtasks /End /TN "HA Screen Off"`, Task Manager, or `scroff stop` all
 terminate it, and it reclaims the screen on clean shutdown. An orphaned
 detached daemon (which the task UI can never end) therefore cannot happen.

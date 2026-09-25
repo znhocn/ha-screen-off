@@ -85,16 +85,14 @@ func run() error {
 		explicit = true
 	}
 
-	// The Windows build is a GUI-subsystem executable (-H=windowsgui): it
-	// never creates a console of its own, so Task Scheduler / autostart runs
-	// are windowless and silent from the very start - there is no window to
-	// hide and no console whose lifetime could take scroff down. When launched
-	// interactively from a terminal, attach to the parent's console so normal
-	// command-line output still works. The detached -d child must NOT attach:
-	// it inherits the log file instead.
+	// The Windows build is a console-subsystem executable so shells wait for
+	// command-line commands to finish. When Task Scheduler, Explorer, or another
+	// non-interactive launcher gives scroff a console of its own, Attach
+	// detaches and silences that window. A shared interactive terminal is left untouched.
+	// The detached -d child must NOT attach: it inherits the log file instead.
 	//
-	// attached=false (no parent console) therefore exactly marks a headless,
-	// autostart-style run. No-op outside Windows.
+	// attached=false therefore marks a hidden or unavailable console. No-op
+	// outside Windows.
 	attached := true
 	if !daemon.Child() {
 		attached = console.Attach()
@@ -133,13 +131,12 @@ func run() error {
 	// Daemon mode: if this process is the spawned background child, keep going;
 	// otherwise re-exec ourselves detached and return.
 	//
-	// Exception: when launched with no console (Task Scheduler / autostart, the
-	// headless case where console.Attach() found nothing to attach to), "-d"
-	// must NOT detach - a detached child would escape the task's control and
-	// could no longer be ended by Task Scheduler. Setting -d there is harmless:
-	// scroff just runs as the direct, fully manageable foreground watchdog,
-	// windowless and silent (GUI subsystem). From a real terminal -d detaches
-	// as usual.
+	// Exception: when launched with a detached or unavailable console (Task
+	// Scheduler / autostart), "-d" must NOT detach - a detached child would
+	// escape the task's control and could no longer be ended by Task Scheduler.
+	// Setting -d there is harmless: scroff just runs as the direct, fully
+	// manageable foreground watchdog, windowless and silent. From a real
+	// terminal -d detaches as usual.
 	if cmd == "serve" && *background && !daemon.Child() && attached {
 		return startBackground()
 	}
@@ -160,8 +157,8 @@ func run() error {
 	if *verbose {
 		cfg.Log.Level = "debug"
 	}
-	// In headless watchdog runs (scheduled task / autostart: no console to
-	// attach to) keep slog out of the void: write to the daemon log file, so
+	// In headless watchdog runs (scheduled task / autostart: no attached
+	// console) keep slog out of the void: write to the daemon log file, so
 	// `scroff logs` shows what happened even though nothing is printed. The -d
 	// child already writes there via its redirected stdout/stderr.
 	setupLogging(cfg.Log.Level, !attached && cmd == "serve")
